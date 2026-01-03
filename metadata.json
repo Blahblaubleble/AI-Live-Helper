@@ -1,0 +1,9 @@
+{
+  "name": "ScreenSentinel AI",
+  "description": "An always-on AI agent that monitors your screen in real-time and answers questions via voice conversation.",
+  "requestFramePermissions": [
+    "microphone",
+    "camera",
+    "display-capture"
+  ]
+}

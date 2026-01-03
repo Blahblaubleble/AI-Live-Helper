@@ -1,0 +1,166 @@
+import React, { useEffect, useRef, useState, useCallback } from 'react';
+
+interface ScreenShareProps {
+  onFrame: (base64: string) => void;
+  onStop: () => void;
+  onStart?: () => void;
+  isActive: boolean;
+}
+
+const ScreenShare: React.FC<ScreenShareProps> = ({ onFrame, onStop, onStart, isActive }) => {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const [isSharing, setIsSharing] = useState(false);
+
+  const stopSharing = useCallback(() => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+    setIsSharing(false);
+    onStop();
+  }, [onStop]);
+
+  const startSharing = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: {
+          width: { ideal: 1280 }, // Capture at decent res for preview
+          height: { ideal: 720 },
+          frameRate: { ideal: 5 }
+        },
+        audio: false 
+      });
+
+      // If we are already sharing, stop the previous stream to avoid multiple tracks
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+      }
+
+      streamRef.current = stream;
+      
+      const videoTracks = stream.getVideoTracks();
+      if (videoTracks.length > 0) {
+        videoTracks[0].onended = () => {
+          stopSharing();
+        };
+      }
+
+      setIsSharing(true);
+      if (onStart) onStart();
+      
+      // Update video element source immediately
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.play().catch(e => console.error("Error playing video preview:", e));
+      }
+
+    } catch (err: any) {
+      // Handle user cancellation gracefully
+      if (err.name === 'NotAllowedError' || err.message?.includes('Permission denied')) {
+        console.log("Screen share permission denied or cancelled by user.");
+      } else {
+        console.error("Error starting screen share:", err);
+      }
+
+      // Check if we still have a valid active stream from before
+      const hasActiveStream = streamRef.current && 
+                              streamRef.current.active && 
+                              streamRef.current.getVideoTracks().length > 0 &&
+                              streamRef.current.getVideoTracks()[0].readyState === 'live';
+
+      if (!hasActiveStream) {
+        setIsSharing(false);
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (isSharing && videoRef.current && streamRef.current) {
+      // Ensure srcObject is set if re-rendering or mounting
+      if (videoRef.current.srcObject !== streamRef.current) {
+          videoRef.current.srcObject = streamRef.current;
+          videoRef.current.play().catch(e => console.error("Error playing video preview:", e));
+      }
+    }
+  }, [isSharing]);
+
+  useEffect(() => {
+    if (!isActive || !isSharing) return;
+
+    const intervalId = setInterval(() => {
+      if (videoRef.current && canvasRef.current) {
+        const video = videoRef.current;
+        const canvas = canvasRef.current;
+        const ctx = canvas.getContext('2d');
+
+        if (ctx && video.videoWidth > 0 && video.videoHeight > 0) {
+          // Downscale to max 800px width for performance
+          const MAX_WIDTH = 800;
+          const scale = Math.min(1, MAX_WIDTH / video.videoWidth);
+          
+          canvas.width = video.videoWidth * scale;
+          canvas.height = video.videoHeight * scale;
+          
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          
+          // Compress to JPEG 0.5 to further reduce payload size
+          const base64Data = canvas.toDataURL('image/jpeg', 0.5);
+          const data = base64Data.split(',')[1];
+          onFrame(data);
+        }
+      }
+    }, 1000); 
+
+    return () => clearInterval(intervalId);
+  }, [isActive, isSharing, onFrame]);
+
+  return (
+    <div className="relative w-full h-full flex flex-col items-center justify-center bg-black/50 rounded-xl overflow-hidden border border-slate-700 group">
+      {!isSharing ? (
+        <div className="text-slate-400 text-center p-6">
+          <p className="mb-4">Monitor your screen with AI</p>
+          <button 
+            onClick={startSharing}
+            disabled={!isActive}
+            className={`px-4 py-2 rounded-lg font-medium transition ${
+              isActive 
+              ? "bg-blue-600 hover:bg-blue-500 text-white" 
+              : "bg-slate-700 text-slate-500 cursor-not-allowed"
+            }`}
+          >
+            {isActive ? "Select Screen to Share" : "Connect first to Share Screen"}
+          </button>
+        </div>
+      ) : (
+        <>
+           <video 
+            ref={videoRef} 
+            className="max-w-full max-h-full object-contain"
+            muted 
+            playsInline
+            autoPlay
+          />
+          <div className="absolute top-2 left-2 px-2 py-1 bg-red-500/80 text-white text-xs rounded animate-pulse pointer-events-none">
+            LIVE MONITORING
+          </div>
+          
+          {/* Change Screen Button Overlay */}
+          <div className="absolute bottom-6 left-1/2 transform -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+             <button
+               onClick={startSharing}
+               className="flex items-center gap-2 px-4 py-2 bg-slate-900/80 hover:bg-blue-600 text-white text-sm font-medium rounded-full backdrop-blur-md border border-slate-600 shadow-xl transition-all hover:scale-105"
+             >
+               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path><path d="M13.5 10.5 21 3"></path><path d="M16 3h5v5"></path></svg>
+               Change Screen
+             </button>
+          </div>
+        </>
+      )}
+      <canvas ref={canvasRef} className="hidden" />
+    </div>
+  );
+};
+
+export default ScreenShare;
