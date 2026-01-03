@@ -19,9 +19,22 @@ export interface LogEntry {
   responseTime?: number;
 }
 
+export interface Project {
+  id: string;
+  name: string;
+  createdAt: string; // ISO String
+  logs: LogEntry[];
+  lastActive: string; // ISO String
+}
+
 export interface UsageStats {
   imagesSent: number;
   modelTurns: number;
   estimatedTokens: number;
   tokensPerMinute: number;
+}
+
+export interface User {
+  username: string;
+  lastLogin: Date;
 }
