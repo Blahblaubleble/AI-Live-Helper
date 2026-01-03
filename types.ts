@@ -18,3 +18,10 @@ export interface LogEntry {
   isFinal?: boolean;
   responseTime?: number;
 }
+
+export interface UsageStats {
+  imagesSent: number;
+  modelTurns: number;
+  estimatedTokens: number;
+  tokensPerMinute: number;
+}

@@ -1,5 +1,6 @@
 import { GoogleGenAI, LiveServerMessage, Modality, GenerateContentResponse } from "@google/genai";
 import { createPcmBlob, decodeAudioData, base64ToUint8Array, arrayBufferToBase64 } from "./audioUtils";
+import { UsageStats } from "../types";
 
 // LiveSession is not exported from the SDK, so we derive it from the return type of connect()
 type LiveSession = Awaited<ReturnType<GoogleGenAI['live']['connect']>>;
@@ -9,6 +10,7 @@ interface LiveServiceCallbacks {
   onDisconnect: () => void;
   onError: (error: Error) => void;
   onTranscript: (text: string, sender: 'user' | 'ai' | 'system', isFinal: boolean, responseTime?: number) => void;
+  onStats: (stats: UsageStats) => void;
 }
 
 export class GeminiLiveService {
@@ -33,11 +35,24 @@ export class GeminiLiveService {
 
   // Cache the last video frame for text-based fallback
   private lastFrame: string | null = null;
+  private isVideoStreamActive: boolean = true; // Tracks intended state, not just if we have a frame
 
   // Latency tracking
   private lastUserInteractionTime: number = 0;
   private responsePending: boolean = false;
   private currentTurnLatency: number | undefined = undefined;
+
+  // Usage Stats
+  private stats: UsageStats = {
+    imagesSent: 0,
+    modelTurns: 0,
+    estimatedTokens: 0,
+    tokensPerMinute: 0
+  };
+  
+  // Sliding window for TPM calculation (timestamp, tokenCount)
+  private tokenHistory: { time: number, count: number }[] = [];
+  private statsInterval: number | null = null;
 
   constructor(callbacks: LiveServiceCallbacks) {
     this.ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
@@ -61,8 +76,42 @@ export class GeminiLiveService {
                  voices[0] || null;
   }
 
+  // Helper to update token usage
+  private recordTokenUsage(count: number) {
+    const now = Date.now();
+    this.tokenHistory.push({ time: now, count });
+    // We do not filter here immediately; the interval handles the decay and filtering
+    // to ensure UI updates even when no new tokens are added.
+    this.updateStats();
+  }
+
+  private updateStats() {
+    const now = Date.now();
+    const oneMinuteAgo = now - 60000;
+    
+    // Filter out old entries
+    this.tokenHistory = this.tokenHistory.filter(entry => entry.time > oneMinuteAgo);
+    
+    // Sum tokens in the last minute
+    const tpm = this.tokenHistory.reduce((acc, entry) => acc + entry.count, 0);
+    
+    this.stats.tokensPerMinute = tpm;
+    this.callbacks.onStats(this.stats);
+  }
+
   public async connect() {
     try {
+      // Reset stats on new connection
+      this.stats = { imagesSent: 0, modelTurns: 0, estimatedTokens: 0, tokensPerMinute: 0 };
+      this.tokenHistory = [];
+      this.callbacks.onStats(this.stats);
+
+      // Start Stats Interval for TPM Decay
+      if (this.statsInterval) clearInterval(this.statsInterval);
+      this.statsInterval = window.setInterval(() => {
+         this.updateStats();
+      }, 1000);
+
       // 1. Setup Audio Contexts
       // INPUT: Force 16000Hz because the model expects 16k PCM. 
       this.inputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
@@ -103,7 +152,8 @@ export class GeminiLiveService {
         },
         config: {
           responseModalities: [Modality.AUDIO],
-          systemInstruction: "You are an intelligent screen-monitoring assistant. I may share my screen with you. If I am sharing my screen, I will send video frames. Please watch the screen continuously. If you have NOT received any video frames yet, assume I am not sharing my screen and explicitly state that you cannot see the screen if asked. Do not hallucinate or make up details about the screen content if you cannot see it. When I ask questions, answer them based on what you see (if available) and your general knowledge. Be concise, helpful, and attentive.",
+          // UPDATED INSTRUCTION: Be more assertive about visual capabilities.
+          systemInstruction: "You are a helpful AI assistant that can see the user's screen. The user is sharing their screen with you via a continuous stream of images. ALWAYS use the visual information from these images to answer questions. If the user asks 'what do you see' or about specific content on the screen, describe the latest image you received. Do not say you cannot see the screen unless you genuinely have received no image data at all. Be concise and conversational.",
           inputAudioTranscription: {},
           outputAudioTranscription: {},
         }
@@ -126,11 +176,22 @@ export class GeminiLiveService {
     this.processor = this.inputAudioContext.createScriptProcessor(2048, 1, 1);
 
     this.processor.onaudioprocess = (e) => {
+      // GUARD: If session is disconnected, stop processing immediately
+      if (!this.session) return;
+
       const inputData = e.inputBuffer.getChannelData(0);
       const pcmBlob = createPcmBlob(inputData);
       
+      // Calculate duration based on actual sample rate to be accurate even if fallback occurs
+      const durationSeconds = inputData.length / e.inputBuffer.sampleRate;
+      // Estimate audio tokens: ~32 tokens per second
+      const estimatedTokens = Math.max(1, Math.ceil(durationSeconds * 32));
+      
+      this.recordTokenUsage(estimatedTokens);
+
       sessionPromise.then(session => {
-        if (session && typeof session.sendRealtimeInput === 'function') {
+        // Double check session match to prevent sending to closed session
+        if (session && this.session === session && typeof session.sendRealtimeInput === 'function') {
           session.sendRealtimeInput({ media: pcmBlob });
         }
       });
@@ -188,6 +249,13 @@ export class GeminiLiveService {
     }
 
     if (message.serverContent?.turnComplete) {
+      // Update stats for model turn
+      this.stats.modelTurns++;
+      // Estimate Output Tokens: ~1.3 tokens per word, or roughly per character count
+      // Just a loose heuristic: length / 4
+      const outputTokens = Math.ceil(this.currentOutputTranscription.length / 4);
+      this.recordTokenUsage(outputTokens);
+
       // Finalize transcriptions
       if (this.currentInputTranscription.trim()) {
         this.callbacks.onTranscript(this.currentInputTranscription, 'user', true);
@@ -255,6 +323,9 @@ export class GeminiLiveService {
 
   public sendVideoFrame(base64Image: string) {
     this.lastFrame = base64Image;
+    this.stats.imagesSent++;
+    // 1 image ~ 258 tokens (Flash)
+    this.recordTokenUsage(258);
 
     if (this.session && typeof (this.session as any).sendRealtimeInput === 'function') {
       (this.session as any).sendRealtimeInput({
@@ -267,21 +338,54 @@ export class GeminiLiveService {
   }
 
   public notifyScreenStart() {
+    this.isVideoStreamActive = true;
     if (this.session && typeof (this.session as any).send === 'function') {
       try {
         (this.session as any).send({
           clientContent: {
             turns: [{
               role: 'user',
-              parts: [{ text: "System notification: I have started sharing my screen." }]
+              // Explicitly tell the model to look at the video feed now.
+              parts: [{ text: "I am now sharing my screen with you. Please look at the video feed." }]
             }],
             turnComplete: true
           }
         });
+        // Input tokens for text
+        this.recordTokenUsage(15); 
       } catch (e) {
         console.warn("Failed to notify screen start", e);
       }
     }
+  }
+
+  public notifyVideoStateChange(isPaused: boolean) {
+    this.isVideoStreamActive = !isPaused;
+    if (isPaused) {
+        // Clear the buffer so text fallback doesn't use stale images
+        this.lastFrame = null;
+        this.sendSystemMessage("User has paused the video stream. You cannot see the screen right now.");
+    } else {
+        this.sendSystemMessage("User has resumed the video stream. You can see the screen again.");
+    }
+  }
+
+  private sendSystemMessage(text: string) {
+      if (this.session && typeof (this.session as any).send === 'function') {
+          try {
+            (this.session as any).send({
+                clientContent: {
+                    turns: [{
+                        role: 'user',
+                        parts: [{ text: `[System Event: ${text}]` }]
+                    }],
+                    turnComplete: true
+                }
+            });
+          } catch(e) {
+              console.warn("Failed to send system message", e);
+          }
+      }
   }
 
   public async sendTextMessage(text: string) {
@@ -295,6 +399,9 @@ export class GeminiLiveService {
     const startTime = Date.now();
     
     try {
+      // Estimate input tokens
+      this.recordTokenUsage(Math.ceil(text.length / 4));
+
       const parts: any[] = [{ text }];
       if (this.lastFrame) {
         parts.push({
@@ -303,15 +410,22 @@ export class GeminiLiveService {
             data: this.lastFrame
           }
         });
+        // Image token usage for fallback
+        this.recordTokenUsage(258);
       } else {
-         parts[0].text = `[System: No screen shared] ${text}`;
+         // Fallback logic if we don't have a frame yet
+         const systemMsg = this.isVideoStreamActive 
+            ? "[System: Video stream is active but no image frame has been received yet. If the user asks about the screen, tell them you are waiting for the video feed to sync.]" 
+            : "[System: No screen shared / Video Paused]";
+         parts[0].text = `${systemMsg} ${text}`;
       }
 
       const stream = await this.ai.models.generateContentStream({
         model: 'gemini-3-flash-preview',
         contents: { parts },
         config: {
-          systemInstruction: "You are an intelligent screen-monitoring assistant. I may share my screen with you. If I am sharing my screen, I will send video frames. Please watch the screen continuously. If you have NOT received any video frames yet, assume I am not sharing my screen and explicitly state that you cannot see the screen if asked. Do not hallucinate or make up details about the screen content if you cannot see it."
+          // Sync system instruction with the Live one
+          systemInstruction: "You are a helpful AI assistant that can see the user's screen. The user is sharing their screen with you via a continuous stream of images. ALWAYS use the visual information from these images to answer questions. If the user asks 'what do you see' or about specific content on the screen, describe the latest image you received. Do not say you cannot see the screen unless you genuinely have received no image data at all. Be concise and conversational."
         }
       });
 
@@ -354,6 +468,9 @@ export class GeminiLiveService {
 
       if (fullText) {
         this.callbacks.onTranscript(fullText, 'ai', true, latency);
+        // Count text fallback as a turn
+        this.stats.modelTurns++;
+        this.recordTokenUsage(Math.ceil(fullText.length / 4));
       }
     } catch (error: any) {
       console.error("Text fallback failed:", error);
@@ -386,8 +503,31 @@ export class GeminiLiveService {
   }
 
   public disconnect() {
+    // Stop Stats Interval
+    if (this.statsInterval) {
+        clearInterval(this.statsInterval);
+        this.statsInterval = null;
+    }
+
+    const wasConnected = this.session !== null;
+
+    // Explicitly nullify session first to stop onaudioprocess logic
+    const currentSession = this.session;
+    this.session = null;
+
+    if (currentSession) {
+        try {
+            // Close the connection explicitly
+            (currentSession as any).close();
+        } catch(e) {
+            console.warn("Failed to close session", e);
+        }
+    }
+
     this.stopAudioOutput();
     this.lastFrame = null;
+    this.tokenHistory = [];
+    this.isVideoStreamActive = true; // Reset assumption
     
     if (this.inputSource) {
       try { this.inputSource.disconnect(); } catch (e) {}
@@ -416,7 +556,9 @@ export class GeminiLiveService {
         this.mediaStream = null;
     }
 
-    this.session = null;
-    this.callbacks.onDisconnect();
+    // Only notify if we were previously connected to avoid loops
+    if (wasConnected) {
+        this.callbacks.onDisconnect();
+    }
   }
 }

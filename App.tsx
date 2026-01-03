@@ -1,8 +1,13 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { GeminiLiveService } from './services/geminiLiveService';
-import ScreenShare from './components/ScreenShare';
-import { ConnectionState, LogEntry } from './types';
-import { Play, Square, AlertCircle, Mic, MicOff, Monitor, Send, Clock } from 'lucide-react';
+import ScreenShare, { ScreenShareHandle } from './components/ScreenShare';
+import { ConnectionState, LogEntry, UsageStats } from './types';
+import { Play, Square, AlertCircle, Mic, MicOff, Monitor, Send, Clock, Image as ImageIcon, MessageSquare, Zap, Activity, Video, VideoOff } from 'lucide-react';
+
+const FREE_TIER_LIMITS = {
+  TPM: 1000000, // 1 Million Tokens Per Minute
+  RPD: 1500     // 1,500 Requests Per Day
+};
 
 const SmoothText = ({ text, isFinal }: { text: string; isFinal?: boolean }) => {
   // If the message is final on mount (e.g. user message or history), show immediately.
@@ -46,15 +51,67 @@ const SmoothText = ({ text, isFinal }: { text: string; isFinal?: boolean }) => {
   return <span className="whitespace-pre-wrap">{displayedText}</span>;
 };
 
+const UsageBar = ({ label, current, max, unit }: { label: string, current: number, max: number, unit: string }) => {
+  const percentage = Math.min(100, Math.max(0, (current / max) * 100));
+  
+  let colorClass = "bg-blue-500";
+  if (percentage > 75) colorClass = "bg-yellow-500";
+  if (percentage > 90) colorClass = "bg-red-500";
+
+  return (
+    <div className="bg-slate-800 p-4 rounded-xl border border-slate-700 flex flex-col gap-2">
+      <div className="flex justify-between items-end">
+        <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">{label}</span>
+        <span className="text-sm font-mono text-slate-200">
+          {current.toLocaleString()} <span className="text-slate-500">/ {max.toLocaleString()} {unit}</span>
+        </span>
+      </div>
+      <div className="w-full h-3 bg-slate-900 rounded-full overflow-hidden border border-slate-700/50">
+        <div 
+          className={`h-full ${colorClass} transition-all duration-500 ease-out`} 
+          style={{ width: `${percentage}%` }}
+        />
+      </div>
+    </div>
+  );
+};
+
 const App: React.FC = () => {
   const [connectionState, setConnectionState] = useState<ConnectionState>(ConnectionState.IDLE);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isMuted, setIsMuted] = useState(false);
+  const [isVideoPaused, setIsVideoPaused] = useState(false);
   const [inputText, setInputText] = useState('');
   const [logs, setLogs] = useState<LogEntry[]>([]);
   
+  // Real-time stats from service
+  const [stats, setStats] = useState<UsageStats>({ imagesSent: 0, modelTurns: 0, estimatedTokens: 0, tokensPerMinute: 0 });
+  
+  // Persisted daily stats
+  const [dailyRequests, setDailyRequests] = useState(0);
+
   const serviceRef = useRef<GeminiLiveService | null>(null);
+  const screenShareRef = useRef<ScreenShareHandle>(null);
+  const isScreenSharingRef = useRef(false);
   const logsEndRef = useRef<HTMLDivElement>(null);
+
+  // Load daily requests from localStorage on mount
+  useEffect(() => {
+    const today = new Date().toDateString();
+    const stored = localStorage.getItem('screenSentinel_dailyStats');
+    if (stored) {
+      const { date, count } = JSON.parse(stored);
+      if (date === today) {
+        setDailyRequests(count);
+      } else {
+        // New day, reset
+        localStorage.setItem('screenSentinel_dailyStats', JSON.stringify({ date: today, count: 0 }));
+        setDailyRequests(0);
+      }
+    } else {
+       localStorage.setItem('screenSentinel_dailyStats', JSON.stringify({ date: today, count: 0 }));
+    }
+  }, []);
 
   // Initialize service ref
   useEffect(() => {
@@ -62,6 +119,29 @@ const App: React.FC = () => {
       onConnect: () => {
         setConnectionState(ConnectionState.CONNECTED);
         addLog('system', 'Connected to Gemini Live Agent.');
+        
+        // INCREMENT DAILY REQUESTS
+        const today = new Date().toDateString();
+        const stored = localStorage.getItem('screenSentinel_dailyStats');
+        let currentCount = 0;
+        
+        if (stored) {
+          try {
+            const { date, count } = JSON.parse(stored);
+            if (date === today) {
+              currentCount = count;
+            }
+          } catch (e) { /* ignore parse error */ }
+        }
+        
+        const newCount = currentCount + 1;
+        localStorage.setItem('screenSentinel_dailyStats', JSON.stringify({ date: today, count: newCount }));
+        setDailyRequests(newCount);
+
+        // Notify screen start if video is already ready
+        if (isScreenSharingRef.current) {
+             serviceRef.current?.notifyScreenStart();
+        }
       },
       onDisconnect: () => {
         setConnectionState(ConnectionState.IDLE);
@@ -75,20 +155,16 @@ const App: React.FC = () => {
       onTranscript: (text, sender, isFinal, responseTime) => {
         setLogs(prev => {
           const lastLog = prev[prev.length - 1];
-          // If the sender is the same as the last log and the last log was NOT final,
-          // update the last log instead of creating a new one.
           if (lastLog && lastLog.sender === sender && !lastLog.isFinal) {
             const updatedLog = {
               ...lastLog,
               message: text,
               isFinal: isFinal,
-              timestamp: new Date(), // Update timestamp to show activity
-              // Only update responseTime if a new value is provided, otherwise keep existing
+              timestamp: new Date(),
               responseTime: responseTime !== undefined ? responseTime : lastLog.responseTime
             };
             return [...prev.slice(0, -1), updatedLog];
           } else {
-            // Otherwise, create a new log entry
             return [...prev, {
               id: Math.random().toString(36).substring(7),
               timestamp: new Date(),
@@ -99,13 +175,16 @@ const App: React.FC = () => {
             }];
           }
         });
+      },
+      onStats: (newStats) => {
+        setStats({ ...newStats });
       }
     });
 
     return () => {
       serviceRef.current?.disconnect();
     };
-  }, []);
+  }, []); 
 
   // Auto scroll logs
   useEffect(() => {
@@ -131,17 +210,36 @@ const App: React.FC = () => {
     setErrorMsg(null);
     setConnectionState(ConnectionState.CONNECTING);
     setIsMuted(false);
+    setIsVideoPaused(false);
+    
+    // 1. Trigger Screen Share Immediately (Requires user gesture, so we do it here)
+    if (screenShareRef.current) {
+        screenShareRef.current.start().catch(err => {
+            console.warn("Screen share start failed or cancelled", err);
+        });
+    }
+
+    // 2. Connect to Service
     serviceRef.current?.connect();
   };
 
   const handleStop = () => {
     serviceRef.current?.disconnect();
+    // Screen share stop is handled by component prop logic mostly, but if button clicked we should stop both
+    screenShareRef.current?.stop();
   };
 
   const handleMuteToggle = () => {
     const newMutedState = !isMuted;
     setIsMuted(newMutedState);
     serviceRef.current?.setMuted(newMutedState);
+  };
+  
+  const handleVideoPauseToggle = () => {
+    const newState = !isVideoPaused;
+    setIsVideoPaused(newState);
+    serviceRef.current?.notifyVideoStateChange(newState);
+    addLog('system', newState ? "Video monitoring paused." : "Video monitoring resumed.");
   };
 
   const handleSendText = (e?: React.FormEvent) => {
@@ -152,11 +250,13 @@ const App: React.FC = () => {
     setInputText('');
   };
 
-  const handleVideoFrame = (base64: string) => {
+  // Critical: useCallback prevents this function from changing on every render (e.g. typing logs),
+  // which prevents the ScreenShare component from constantly resetting/firing its effects.
+  const handleVideoFrame = useCallback((base64: string) => {
     if (connectionState === ConnectionState.CONNECTED) {
       serviceRef.current?.sendVideoFrame(base64);
     }
-  };
+  }, [connectionState]);
 
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col p-4 md:p-8">
@@ -180,7 +280,7 @@ const App: React.FC = () => {
       {/* Main Content Grid */}
       <main className="flex-1 grid grid-cols-1 lg:grid-cols-3 gap-6 min-h-0">
         
-        {/* Left Column: Screen & Visualizer */}
+        {/* Left Column: Screen & Controls & Stats */}
         <div className="lg:col-span-2 flex flex-col gap-6">
           
           {/* Screen Share Viewport */}
@@ -212,27 +312,41 @@ const App: React.FC = () => {
             )}
 
             <ScreenShare 
-              isActive={connectionState === ConnectionState.CONNECTED} 
+              ref={screenShareRef}
+              isActive={connectionState === ConnectionState.CONNECTED}
+              isPaused={isVideoPaused}
               onFrame={handleVideoFrame}
-              onStop={handleStop}
-              onStart={() => serviceRef.current?.notifyScreenStart()}
+              onStop={() => {
+                  isScreenSharingRef.current = false;
+                  handleStop();
+              }}
+              onStart={() => {
+                  // Video is ready
+                  isScreenSharingRef.current = true;
+                  if (connectionState === ConnectionState.CONNECTED) {
+                      serviceRef.current?.notifyScreenStart();
+                  }
+              }}
             />
           </div>
 
-          {/* Control Bar (Replaces Audio Visualizer) */}
+          {/* Control Bar */}
           <div className="h-24 bg-slate-800 rounded-2xl border border-slate-700 flex items-center justify-between px-8">
             <div className="flex items-center gap-3">
               <div className={`w-3 h-3 rounded-full ${
-                connectionState === ConnectionState.CONNECTED && !isMuted ? 'bg-red-500 animate-pulse' : 'bg-slate-600'
+                connectionState === ConnectionState.CONNECTED 
+                   ? (isMuted ? 'bg-slate-500' : 'bg-green-500 animate-pulse')
+                   : 'bg-slate-600'
               }`} />
-              <span className="text-slate-400 font-medium">
+              <span className="text-slate-400 font-medium hidden sm:inline">
                 {connectionState === ConnectionState.CONNECTED 
-                  ? (isMuted ? "Microphone Muted" : "Microphone Active") 
-                  : "Microphone Idle"}
+                  ? (isVideoPaused ? "Video Paused (Audio Only)" : "Live Video & Audio") 
+                  : "Agent Idle"}
               </span>
             </div>
 
             <div className="flex items-center gap-4">
+              {/* Mic Toggle */}
               <button
                 onClick={handleMuteToggle}
                 disabled={connectionState !== ConnectionState.CONNECTED}
@@ -244,6 +358,20 @@ const App: React.FC = () => {
                 title={isMuted ? "Unmute Microphone" : "Mute Microphone"}
               >
                 {isMuted ? <MicOff className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
+              </button>
+              
+              {/* Video Pause Toggle */}
+               <button
+                onClick={handleVideoPauseToggle}
+                disabled={connectionState !== ConnectionState.CONNECTED}
+                className={`p-4 rounded-full transition-colors ${
+                  isVideoPaused 
+                    ? 'bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30' 
+                    : 'bg-slate-700 hover:bg-slate-600 text-emerald-400'
+                } ${connectionState !== ConnectionState.CONNECTED ? 'opacity-50 cursor-not-allowed' : ''}`}
+                title={isVideoPaused ? "Resume Video Stream" : "Pause Video Stream"}
+              >
+                {isVideoPaused ? <VideoOff className="w-6 h-6" /> : <Video className="w-6 h-6" />}
               </button>
 
               {connectionState === ConnectionState.CONNECTED && (
@@ -257,12 +385,33 @@ const App: React.FC = () => {
              )}
             </div>
           </div>
+          
+          {/* Usage Limit Bars */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+             <UsageBar 
+               label="Current Speed (Tokens / Min)" 
+               current={stats.tokensPerMinute} 
+               max={FREE_TIER_LIMITS.TPM} 
+               unit="TPM"
+             />
+             <UsageBar 
+               label="Daily Requests (Sessions)" 
+               current={dailyRequests} 
+               max={FREE_TIER_LIMITS.RPD} 
+               unit="Reqs"
+             />
+          </div>
+
         </div>
 
         {/* Right Column: Conversation Log & Text Input */}
         <div className="bg-slate-800 rounded-2xl border border-slate-700 flex flex-col overflow-hidden max-h-[calc(100vh-8rem)]">
-          <div className="p-4 border-b border-slate-700 bg-slate-800/50">
+          <div className="p-4 border-b border-slate-700 bg-slate-800/50 flex justify-between items-center">
             <h2 className="font-semibold text-slate-300">Live Transcript</h2>
+            <div className="flex items-center gap-2 text-xs text-slate-500">
+               <Activity className="w-3 h-3" />
+               <span>{stats.modelTurns} turns</span>
+            </div>
           </div>
           
           {/* Logs */}

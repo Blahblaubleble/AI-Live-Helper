@@ -1,17 +1,26 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback, useImperativeHandle, forwardRef } from 'react';
+
+export interface ScreenShareHandle {
+  start: () => Promise<void>;
+  stop: () => void;
+}
 
 interface ScreenShareProps {
   onFrame: (base64: string) => void;
   onStop: () => void;
   onStart?: () => void;
   isActive: boolean;
+  isPaused?: boolean;
 }
 
-const ScreenShare: React.FC<ScreenShareProps> = ({ onFrame, onStop, onStart, isActive }) => {
+const ScreenShare = forwardRef<ScreenShareHandle, ScreenShareProps>(({ onFrame, onStop, onStart, isActive, isPaused = false }, ref) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const [isSharing, setIsSharing] = useState(false);
+  
+  // Rate limiting ref to prevent "going crazy" loops
+  const lastFrameTimeRef = useRef<number>(0);
 
   const stopSharing = useCallback(() => {
     if (streamRef.current) {
@@ -21,6 +30,38 @@ const ScreenShare: React.FC<ScreenShareProps> = ({ onFrame, onStop, onStart, isA
     setIsSharing(false);
     onStop();
   }, [onStop]);
+
+  // Capture frame function extracted for reuse
+  const captureAndSendFrame = useCallback(() => {
+      if (!videoRef.current || !canvasRef.current) return;
+      
+      const now = Date.now();
+      // Hard throttle: never send more than 1 frame per 500ms, protecting against loops
+      if (now - lastFrameTimeRef.current < 500) {
+          return;
+      }
+      lastFrameTimeRef.current = now;
+      
+      const video = videoRef.current;
+      const canvas = canvasRef.current;
+      const ctx = canvas.getContext('2d');
+
+      if (ctx && video.videoWidth > 0 && video.videoHeight > 0) {
+        // Downscale to max 800px width for performance
+        const MAX_WIDTH = 800;
+        const scale = Math.min(1, MAX_WIDTH / video.videoWidth);
+        
+        canvas.width = video.videoWidth * scale;
+        canvas.height = video.videoHeight * scale;
+        
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        
+        // Compress to JPEG 0.5 to further reduce payload size
+        const base64Data = canvas.toDataURL('image/jpeg', 0.5);
+        const data = base64Data.split(',')[1];
+        onFrame(data);
+      }
+  }, [onFrame]);
 
   const startSharing = async () => {
     try {
@@ -48,13 +89,9 @@ const ScreenShare: React.FC<ScreenShareProps> = ({ onFrame, onStop, onStart, isA
       }
 
       setIsSharing(true);
-      if (onStart) onStart();
-      
-      // Update video element source immediately
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.play().catch(e => console.error("Error playing video preview:", e));
-      }
+      // NOTE: We do not set srcObject or call onStart here anymore.
+      // We wait for the state update to mount the <video>, then useEffect sets srcObject,
+      // then onLoadedData triggers the first frame and notification.
 
     } catch (err: any) {
       // Handle user cancellation gracefully
@@ -76,45 +113,66 @@ const ScreenShare: React.FC<ScreenShareProps> = ({ onFrame, onStop, onStart, isA
     }
   };
 
+  useImperativeHandle(ref, () => ({
+    start: startSharing,
+    stop: stopSharing
+  }));
+
+  // When video data is loaded, play it, send the first frame, and notify the agent.
+  // This ensures the agent receives the visual context BEFORE or WITH the "I am sharing" message.
+  const handleVideoLoad = () => {
+    if (videoRef.current) {
+      videoRef.current.play()
+        .then(() => {
+          console.log("Video playing, sending initial frame...");
+          captureAndSendFrame();
+          if (onStart) onStart();
+        })
+        .catch(e => console.error("Error playing video preview:", e));
+    }
+  };
+
   useEffect(() => {
     if (isSharing && videoRef.current && streamRef.current) {
       // Ensure srcObject is set if re-rendering or mounting
       if (videoRef.current.srcObject !== streamRef.current) {
           videoRef.current.srcObject = streamRef.current;
-          videoRef.current.play().catch(e => console.error("Error playing video preview:", e));
+          // Note: we rely on onLoadedData to play and trigger start logic
       }
     }
   }, [isSharing]);
 
   useEffect(() => {
+    // If paused, do not set interval
     if (!isActive || !isSharing) return;
+    
+    if (isPaused) return;
 
-    const intervalId = setInterval(() => {
-      if (videoRef.current && canvasRef.current) {
-        const video = videoRef.current;
-        const canvas = canvasRef.current;
-        const ctx = canvas.getContext('2d');
-
-        if (ctx && video.videoWidth > 0 && video.videoHeight > 0) {
-          // Downscale to max 800px width for performance
-          const MAX_WIDTH = 800;
-          const scale = Math.min(1, MAX_WIDTH / video.videoWidth);
-          
-          canvas.width = video.videoWidth * scale;
-          canvas.height = video.videoHeight * scale;
-          
-          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-          
-          // Compress to JPEG 0.5 to further reduce payload size
-          const base64Data = canvas.toDataURL('image/jpeg', 0.5);
-          const data = base64Data.split(',')[1];
-          onFrame(data);
-        }
-      }
-    }, 1000); 
+    // Send a frame every 2000ms (0.5 FPS) - Reduced from 1000ms to save tokens
+    const intervalId = setInterval(captureAndSendFrame, 2000); 
 
     return () => clearInterval(intervalId);
-  }, [isActive, isSharing, onFrame]);
+  }, [isActive, isSharing, isPaused, captureAndSendFrame]);
+
+  // Force immediate frame capture when unpausing
+  // This prevents the "I can't see anything" gap between resume and the next interval tick
+  useEffect(() => {
+    if (isActive && isSharing && !isPaused) {
+      captureAndSendFrame();
+    }
+  }, [isPaused, isActive, isSharing, captureAndSendFrame]);
+
+  // Determine badge text and color
+  let badgeText = 'LIVE MONITORING';
+  let badgeColor = 'bg-emerald-500/90 animate-pulse'; // Green for live
+
+  if (isPaused) {
+      badgeText = 'VIDEO PAUSED (SAVING TOKENS)';
+      badgeColor = 'bg-yellow-500/90';
+  } else if (!isActive) {
+      badgeText = 'WAITING FOR CONNECTION...';
+      badgeColor = 'bg-blue-500/80 animate-pulse';
+  }
 
   return (
     <div className="relative w-full h-full flex flex-col items-center justify-center bg-black/50 rounded-xl overflow-hidden border border-slate-700 group">
@@ -137,13 +195,16 @@ const ScreenShare: React.FC<ScreenShareProps> = ({ onFrame, onStop, onStart, isA
         <>
            <video 
             ref={videoRef} 
-            className="max-w-full max-h-full object-contain"
+            className={`max-w-full max-h-full object-contain transition-opacity duration-300 ${isPaused ? 'opacity-50 grayscale' : 'opacity-100'}`}
+            onLoadedData={handleVideoLoad}
             muted 
             playsInline
             autoPlay
           />
-          <div className="absolute top-2 left-2 px-2 py-1 bg-red-500/80 text-white text-xs rounded animate-pulse pointer-events-none">
-            LIVE MONITORING
+          
+          {/* Status Badge */}
+          <div className={`absolute top-2 left-2 px-2 py-1 text-white text-xs font-bold tracking-wide rounded pointer-events-none transition-colors duration-300 shadow-lg ${badgeColor}`}>
+            {badgeText}
           </div>
           
           {/* Change Screen Button Overlay */}
@@ -161,6 +222,8 @@ const ScreenShare: React.FC<ScreenShareProps> = ({ onFrame, onStop, onStart, isA
       <canvas ref={canvasRef} className="hidden" />
     </div>
   );
-};
+});
+
+ScreenShare.displayName = 'ScreenShare';
 
 export default ScreenShare;
