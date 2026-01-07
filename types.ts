@@ -1,3 +1,4 @@
+
 export enum ConnectionState {
   IDLE = 'IDLE',
   CONNECTING = 'CONNECTING',
@@ -19,11 +20,21 @@ export interface LogEntry {
   responseTime?: number;
 }
 
+export interface Task {
+  id: string;
+  title: string;
+  completed: boolean;
+  priority: 'Low' | 'Medium' | 'High';
+  dueDate: string; // ISO String
+  createdAt: string; // ISO String
+}
+
 export interface Project {
   id: string;
   name: string;
   createdAt: string; // ISO String
   logs: LogEntry[];
+  tasks: Task[];
   lastActive: string; // ISO String
 }
 

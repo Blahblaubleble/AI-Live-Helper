@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { GeminiLiveService } from './services/geminiLiveService';
+import { GeminiLiveService, ToolExecutors } from './services/geminiLiveService';
 import ScreenShare, { ScreenShareHandle } from './components/ScreenShare';
 import LoginPage from './components/LoginPage';
-import { db } from './services/database'; // NEW IMPORT
-import { ConnectionState, LogEntry, UsageStats, Project, User } from './types';
-import { Play, Square, AlertCircle, Mic, MicOff, Monitor, Send, Clock, Activity, Video, VideoOff, FolderPlus, Folder, Trash2, ChevronRight, Zap, LogOut, User as UserIcon, Download, X } from 'lucide-react';
+import TodoList from './components/TodoList'; 
+import { db } from './services/database';
+import { ConnectionState, LogEntry, UsageStats, Project, User, Task } from './types';
+import { Play, Square, AlertCircle, Mic, MicOff, Monitor, Send, Clock, Activity, Video, VideoOff, FolderPlus, Folder, Trash2, Zap, LogOut, User as UserIcon, Download, X, ListTodo, MessageSquare } from 'lucide-react';
 
 const FREE_TIER_LIMITS = {
   TPM: 1000000, 
@@ -83,6 +84,9 @@ const App: React.FC = () => {
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [isDataLoaded, setIsDataLoaded] = useState(false);
   
+  // View Mode State (Menu Selection)
+  const [viewMode, setViewMode] = useState<'chat' | 'tasks'>('chat');
+  
   // Create Project Modal State
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
@@ -96,6 +100,16 @@ const App: React.FC = () => {
   const screenShareRef = useRef<ScreenShareHandle>(null);
   const isScreenSharingRef = useRef(false);
   const logsEndRef = useRef<HTMLDivElement>(null);
+  
+  // Refs to track state for callbacks without triggering re-renders of the service
+  const logsRef = useRef<LogEntry[]>([]);
+  const projectsRef = useRef<Project[]>([]);
+  const activeProjectIdRef = useRef<string | null>(null);
+
+  // Update refs whenever state changes
+  useEffect(() => { logsRef.current = logs; }, [logs]);
+  useEffect(() => { projectsRef.current = projects; }, [projects]);
+  useEffect(() => { activeProjectIdRef.current = activeProjectId; }, [activeProjectId]);
 
   // Load persistence via DB Service
   useEffect(() => {
@@ -116,25 +130,38 @@ const App: React.FC = () => {
     loadData();
   }, [user]);
 
-  // Save Projects Persistence via DB Service
+  // Sync Logs to Projects & Persist (Debounced)
   useEffect(() => {
-    if (!user || !isDataLoaded) return;
-    
-    // Auto-save logic
-    db.saveProjects(user.username, projects);
-  }, [projects, user, isDataLoaded]);
+    if (!user || !isDataLoaded || !activeProjectId) return;
 
-  // Sync Logs to Active Project
-  useEffect(() => {
-    if (activeProjectId) {
-        setProjects(prev => prev.map(p => {
+    const syncAndSave = () => {
+        // Access refs directly to ensure latest state without stale closures
+        const currentProjects = projectsRef.current;
+        const currentLogs = logsRef.current;
+        
+        // Calculate new project state
+        const updatedProjects = currentProjects.map(p => {
             if (p.id === activeProjectId) {
-                return { ...p, logs: logs, lastActive: new Date().toISOString() };
+                return { ...p, logs: currentLogs, lastActive: new Date().toISOString() };
             }
             return p;
-        }));
-    }
-  }, [logs, activeProjectId]);
+        });
+        
+        // 1. Update React State
+        setProjects(updatedProjects);
+        
+        // 2. Perform Side Effect (DB Save) OUTSIDE of the state setter
+        db.saveProjects(user.username, updatedProjects).catch(err => console.error("Auto-save failed", err));
+    };
+
+    // Save every 2 seconds if there are changes, or on unmount
+    const intervalId = setInterval(syncAndSave, 2000);
+
+    return () => {
+        clearInterval(intervalId);
+        syncAndSave(); // Save on cleanup (project switch/unmount)
+    };
+  }, [activeProjectId, user, isDataLoaded]); 
 
   // Focus input when modal opens
   useEffect(() => {
@@ -145,6 +172,142 @@ const App: React.FC = () => {
 
   // Initialize service
   useEffect(() => {
+    // Define Tool Logic here to access React Setters via closure
+    const toolExecutors: ToolExecutors = {
+        createProject: (name) => {
+            if (!user) return "Error: No user logged in.";
+            const newProject: Project = {
+                id: Math.random().toString(36).substring(2, 9),
+                name: name.trim(),
+                createdAt: new Date().toISOString(),
+                lastActive: new Date().toISOString(),
+                logs: [],
+                tasks: []
+            };
+            
+            // Optimistic Update
+            const updated = [...projectsRef.current, newProject];
+            setProjects(updated);
+            db.saveProjects(user.username, updated);
+            
+            // Switch to it
+            setActiveProjectId(newProject.id);
+            setLogs([]); // Clear logs for new context
+            setViewMode('tasks'); // Show them the new project list
+            
+            return `Project '${name}' created and set as active.`;
+        },
+
+        switchProject: (name) => {
+            if (!user) return "Error: No user logged in.";
+            const project = projectsRef.current.find(p => p.name.toLowerCase().includes(name.toLowerCase()));
+            
+            if (project) {
+                // Save current state before switching? 
+                // The debounce effect will handle latest save, but we force one here for safety
+                if (activeProjectIdRef.current) {
+                     const currentId = activeProjectIdRef.current;
+                     const updatedProjects = projectsRef.current.map(p => {
+                         if (p.id === currentId) {
+                             return { ...p, logs: logsRef.current, lastActive: new Date().toISOString() };
+                         }
+                         return p;
+                     });
+                     db.saveProjects(user.username, updatedProjects);
+                     setProjects(updatedProjects);
+                }
+
+                setActiveProjectId(project.id);
+                setLogs(project.logs || []);
+                return `Switched to project '${project.name}'.`;
+            }
+            return `Project '${name}' not found. Available projects: ${projectsRef.current.map(p => p.name).join(', ')}`;
+        },
+
+        addTask: (title, priority) => {
+            if (!activeProjectIdRef.current) return "No active project. Please create or select a project first.";
+            
+            // Valid priority check
+            const validPriority = (['Low', 'Medium', 'High'].includes(priority) ? priority : 'Medium') as 'Low'|'Medium'|'High';
+            
+            const today = new Date();
+            today.setHours(23, 59, 59, 999);
+
+            const newTask: Task = {
+                id: Math.random().toString(36).substring(2, 9),
+                title: title,
+                completed: false,
+                priority: validPriority,
+                dueDate: today.toISOString(),
+                createdAt: new Date().toISOString(),
+            };
+
+            setProjects(prev => prev.map(p => {
+                if (p.id === activeProjectIdRef.current) {
+                    return { ...p, tasks: [...(p.tasks || []), newTask], lastActive: new Date().toISOString() };
+                }
+                return p;
+            }));
+            
+            setViewMode('tasks'); // Auto-switch view to show the user
+            return `Task '${title}' added with ${validPriority} priority.`;
+        },
+
+        markTaskComplete: (title) => {
+             if (!activeProjectIdRef.current) return "No active project.";
+             
+             const currentProject = projectsRef.current.find(p => p.id === activeProjectIdRef.current);
+             if (!currentProject) return "Active project not found.";
+             
+             // Fuzzy search
+             const task = currentProject.tasks.find(t => t.title.toLowerCase().includes(title.toLowerCase()));
+             
+             if (task) {
+                 setProjects(prev => prev.map(p => {
+                    if (p.id === activeProjectIdRef.current) {
+                        return { 
+                            ...p, 
+                            tasks: p.tasks.map(t => t.id === task.id ? { ...t, completed: true } : t),
+                            lastActive: new Date().toISOString()
+                        };
+                    }
+                    return p;
+                }));
+                setViewMode('tasks');
+                return `Task '${task.title}' marked as complete.`;
+             }
+             return `Could not find a task matching '${title}'.`;
+        },
+
+        getTasks: () => {
+             if (!activeProjectIdRef.current) return "No active project.";
+             const currentProject = projectsRef.current.find(p => p.id === activeProjectIdRef.current);
+             if (!currentProject) return "Active project not found.";
+             
+             const allTasks = currentProject.tasks || [];
+             if (allTasks.length === 0) return "The to-do list is empty.";
+
+             const pending = allTasks.filter(t => !t.completed).map(t => `- [ ] ${t.title} (${t.priority})`);
+             const completed = allTasks.filter(t => t.completed).map(t => `- [x] ${t.title}`);
+             
+             let response = "";
+             if (pending.length > 0) {
+                 response += `Here are the pending tasks:\n${pending.join('\n')}`;
+             } else {
+                 response += "No pending tasks! Great job.";
+             }
+             
+             if (completed.length > 0) {
+                 response += `\n\nRecently completed:\n${completed.join('\n')}`;
+             }
+             
+             // Auto-switch to view so user can follow along
+             setViewMode('tasks'); 
+             
+             return response;
+        }
+    };
+
     serviceRef.current = new GeminiLiveService({
       onConnect: () => {
         setConnectionState(ConnectionState.CONNECTED);
@@ -172,16 +335,25 @@ const App: React.FC = () => {
       },
       onTranscript: (text, sender, isFinal, responseTime) => {
         setLogs(prev => {
-          const lastLog = prev[prev.length - 1];
-          if (lastLog && lastLog.sender === sender && !lastLog.isFinal) {
-            const updatedLog = {
-              ...lastLog,
+          // Find the last log from this sender that is NOT final
+          let matchIndex = -1;
+          for (let i = prev.length - 1; i >= 0; i--) {
+              if (prev[i].sender === sender && !prev[i].isFinal) {
+                  matchIndex = i;
+                  break;
+              }
+          }
+
+          if (matchIndex !== -1) {
+            const updatedLogs = [...prev];
+            updatedLogs[matchIndex] = {
+              ...updatedLogs[matchIndex],
               message: text,
               isFinal: isFinal,
               timestamp: new Date(),
-              responseTime: responseTime !== undefined ? responseTime : lastLog.responseTime
+              responseTime: responseTime !== undefined ? responseTime : updatedLogs[matchIndex].responseTime
             };
-            return [...prev.slice(0, -1), updatedLog];
+            return updatedLogs;
           } else {
             return [...prev, {
               id: Math.random().toString(36).substring(7),
@@ -196,17 +368,20 @@ const App: React.FC = () => {
       },
       onStats: (newStats) => {
         setStats({ ...newStats });
-      }
+      },
+      toolExecutors // Pass the tool handlers defined above
     });
 
     return () => {
       serviceRef.current?.disconnect();
     };
-  }, [user]);
+  }, [user]); // Re-create service if user changes (rare, essentially only on login)
 
   useEffect(() => {
-    logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [logs]);
+    if (viewMode === 'chat') {
+        logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [logs, viewMode]);
 
   const addLog = (sender: 'user' | 'ai' | 'system', message: string) => {
     setLogs(prev => [...prev, {
@@ -222,6 +397,20 @@ const App: React.FC = () => {
     if (connectionState === ConnectionState.CONNECTED) {
         handleStop();
     }
+    
+    // Force one last save before clearing
+    if (user && activeProjectId) {
+         // Direct access via ref to avoid state closure issues
+         const currentProjects = projectsRef.current;
+         const updatedProjects = currentProjects.map(p => {
+            if (p.id === activeProjectId) {
+                return { ...p, logs: logsRef.current, lastActive: new Date().toISOString() };
+            }
+            return p;
+         });
+         db.saveProjects(user.username, updatedProjects);
+    }
+
     setUser(null);
     setIsDataLoaded(false); // Reset persistence lock
     setProjects([]);
@@ -262,23 +451,45 @@ const App: React.FC = () => {
           name: newProjectName.trim(),
           createdAt: new Date().toISOString(),
           lastActive: new Date().toISOString(),
-          logs: []
+          logs: [],
+          tasks: []
       };
-      setProjects([...projects, newProject]);
+      // Optimistic update
+      const updatedProjects = [...projects, newProject];
+      setProjects(updatedProjects);
+      
+      // Save immediately
+      if (user) db.saveProjects(user.username, updatedProjects);
+
       selectProject(newProject.id);
       setIsCreateModalOpen(false);
   };
 
   const selectProject = (id: string) => {
-      // Disconnect if active to prevent state bleeding
+      // Disconnect if active
       if (connectionState === ConnectionState.CONNECTED) {
           handleStop();
       }
 
+      // 1. Save current project if one is active
+      if (activeProjectId && user) {
+        const updatedProjects = projects.map(p => {
+            if (p.id === activeProjectId) {
+                return { ...p, logs: logsRef.current, lastActive: new Date().toISOString() };
+            }
+            return p;
+        });
+        setProjects(updatedProjects);
+        db.saveProjects(user.username, updatedProjects);
+      }
+
+      // 2. Load new project
       const project = projects.find(p => p.id === id);
       if (project) {
           setActiveProjectId(id);
-          setLogs(project.logs);
+          setLogs(project.logs || []);
+          // Ensure view mode is chat by default on new project
+          setViewMode('chat');
       }
   };
 
@@ -288,8 +499,7 @@ const App: React.FC = () => {
 
       const updated = projects.filter(p => p.id !== id);
       setProjects(updated);
-      
-      // Auto-save handles the DB update via useEffect
+      db.saveProjects(user.username, updated);
       
       if (activeProjectId === id) {
           setActiveProjectId(null);
@@ -298,9 +508,22 @@ const App: React.FC = () => {
   };
 
   const switchToQuickSession = () => {
+      // Save current before switching
+      if (activeProjectId && user) {
+          const updatedProjects = projects.map(p => {
+            if (p.id === activeProjectId) {
+                return { ...p, logs: logsRef.current, lastActive: new Date().toISOString() };
+            }
+            return p;
+          });
+          setProjects(updatedProjects);
+          db.saveProjects(user.username, updatedProjects);
+      }
+
       if (connectionState === ConnectionState.CONNECTED) handleStop();
       setActiveProjectId(null);
       setLogs([]);
+      setViewMode('chat');
   };
 
   const handleStart = () => {
@@ -354,10 +577,51 @@ const App: React.FC = () => {
     }
   }, [connectionState]);
 
+  // Task Handlers
+  const handleAddTask = (task: Task) => {
+      if (!activeProjectId) return;
+      setProjects(prev => prev.map(p => {
+          if (p.id === activeProjectId) {
+              return { ...p, tasks: [...(p.tasks || []), task], lastActive: new Date().toISOString() };
+          }
+          return p;
+      }));
+  };
+
+  const handleToggleTask = (taskId: string) => {
+      if (!activeProjectId) return;
+      setProjects(prev => prev.map(p => {
+          if (p.id === activeProjectId) {
+              return { 
+                  ...p, 
+                  tasks: (p.tasks || []).map(t => t.id === taskId ? { ...t, completed: !t.completed } : t),
+                  lastActive: new Date().toISOString()
+              };
+          }
+          return p;
+      }));
+  };
+
+  const handleDeleteTask = (taskId: string) => {
+      if (!activeProjectId) return;
+      setProjects(prev => prev.map(p => {
+          if (p.id === activeProjectId) {
+              return { 
+                  ...p, 
+                  tasks: (p.tasks || []).filter(t => t.id !== taskId),
+                  lastActive: new Date().toISOString()
+              };
+          }
+          return p;
+      }));
+  };
+
   // Auth Guard
   if (!user) {
       return <LoginPage onLogin={setUser} />;
   }
+
+  const activeProject = projects.find(p => p.id === activeProjectId);
 
   return (
     <div className="flex h-screen bg-slate-900 text-slate-100 overflow-hidden relative">
@@ -520,9 +784,40 @@ const App: React.FC = () => {
                 <div>
                     <h1 className="text-xl font-bold bg-gradient-to-r from-blue-400 to-emerald-400 bg-clip-text text-transparent flex items-center gap-2">
                         ScreenSentinel AI
-                        {activeProjectId && <span className="text-slate-500 text-sm font-normal hidden md:inline"> / {projects.find(p => p.id === activeProjectId)?.name}</span>}
+                        {activeProjectId && <span className="text-slate-500 text-sm font-normal hidden md:inline"> / {activeProject?.name}</span>}
                     </h1>
                 </div>
+            </div>
+
+            {/* View Switcher Menu */}
+            <div className="flex bg-slate-800/50 p-1 rounded-lg border border-slate-700/50 backdrop-blur-sm">
+                <button 
+                    onClick={() => setViewMode('chat')}
+                    className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${
+                        viewMode === 'chat' 
+                        ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' 
+                        : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
+                    }`}
+                >
+                    <MessageSquare className="w-4 h-4" />
+                    AI Chat
+                </button>
+                <button 
+                    onClick={() => setViewMode('tasks')}
+                    className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${
+                        viewMode === 'tasks' 
+                        ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' 
+                        : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
+                    }`}
+                >
+                    <ListTodo className="w-4 h-4" />
+                    To-Do List
+                    {activeProject?.tasks?.filter(t => !t.completed).length ? (
+                        <span className="bg-white/20 text-white text-[10px] px-1.5 py-0.5 rounded-full ml-1">
+                            {activeProject.tasks.filter(t => !t.completed).length}
+                        </span>
+                    ) : null}
+                </button>
             </div>
 
             <div className="flex items-center space-x-3">
@@ -552,7 +847,7 @@ const App: React.FC = () => {
                   <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-slate-900/90 backdrop-blur-sm rounded-xl p-6 text-center">
                     <Monitor className="w-16 h-16 text-slate-600 mb-4" />
                     <h3 className="text-xl font-semibold text-slate-300">
-                        {activeProjectId ? `Ready to resume "${projects.find(p => p.id === activeProjectId)?.name}"` : "Ready to Monitor"}
+                        {activeProjectId ? `Ready to resume "${activeProject?.name}"` : "Ready to Monitor"}
                     </h3>
                     <p className="text-slate-500 max-w-md mt-2 mb-8">
                        {activeProjectId ? "History is loaded. Connect to resume the session." : "Connect to start the AI agent. It will watch your screen and listen to your voice commands."}
@@ -660,77 +955,97 @@ const App: React.FC = () => {
 
             </div>
 
-            {/* Right Column: Chat */}
+            {/* Right Column: Dynamic Content (Chat OR Tasks) */}
             <div className="bg-slate-800 rounded-2xl border border-slate-700 flex flex-col overflow-hidden max-h-[calc(100vh-8rem)] shadow-lg">
-              <div className="p-4 border-b border-slate-700 bg-slate-800/80 backdrop-blur flex justify-between items-center">
-                <h2 className="font-semibold text-slate-300 flex items-center gap-2">
-                    <Activity className="w-4 h-4 text-blue-400" />
-                    Transcript
-                </h2>
-                <div className="text-xs text-slate-500 font-mono">
-                   {stats.modelTurns} turns
-                </div>
-              </div>
               
-              <div className="flex-1 overflow-y-auto p-4 space-y-4 min-h-0 bg-slate-900/30">
-                {logs.length === 0 && (
-                  <div className="h-full flex flex-col items-center justify-center text-slate-600 space-y-2">
-                    <Activity className="w-8 h-8 opacity-20" />
-                    <p className="text-sm italic">Conversation history will appear here...</p>
-                  </div>
-                )}
-                {logs.map((log) => (
-                  <div 
-                    key={log.id} 
-                    className={`flex flex-col ${
-                      log.sender === 'user' ? 'items-end' : 
-                      log.sender === 'ai' ? 'items-start' : 'items-center'
-                    }`}
-                  >
-                    <div className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm shadow-md ${
-                      log.sender === 'user' ? 'bg-blue-600 text-white rounded-br-none' : 
-                      log.sender === 'ai' ? 'bg-slate-700 text-slate-200 rounded-bl-none' : 
-                      'bg-slate-800/50 text-slate-500 text-xs italic border border-slate-700'
-                    }`}>
-                      <SmoothText text={log.message} isFinal={log.isFinal} />
-                    </div>
-                    {log.sender !== 'system' && (
-                      <div className="flex items-center gap-2 mt-1 px-1">
-                         <span className="text-[10px] text-slate-600 font-mono">
-                          {new Date(log.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second: '2-digit'})}
-                        </span>
-                        {log.sender === 'ai' && log.responseTime !== undefined && (
-                          <span className="flex items-center text-[10px] text-emerald-500 bg-emerald-500/10 px-1 rounded">
-                             <Clock className="w-3 h-3 mr-1" />
-                             {(log.responseTime / 1000).toFixed(2)}s
-                          </span>
-                        )}
+              {viewMode === 'chat' ? (
+                  <>
+                      <div className="p-4 border-b border-slate-700 bg-slate-800/80 backdrop-blur flex justify-between items-center">
+                        <h2 className="font-semibold text-slate-300 flex items-center gap-2">
+                            <Activity className="w-4 h-4 text-blue-400" />
+                            Transcript
+                        </h2>
+                        <div className="text-xs text-slate-500 font-mono">
+                           {stats.modelTurns} turns
+                        </div>
                       </div>
-                    )}
-                  </div>
-                ))}
-                <div ref={logsEndRef} />
-              </div>
 
-              <div className="p-4 bg-slate-900 border-t border-slate-700">
-                <form onSubmit={handleSendText} className="flex gap-2">
-                  <input
-                    type="text"
-                    value={inputText}
-                    onChange={(e) => setInputText(e.target.value)}
-                    disabled={connectionState !== ConnectionState.CONNECTED}
-                    placeholder={connectionState === ConnectionState.CONNECTED ? "Type a message..." : "Connect to chat..."}
-                    className="flex-1 bg-slate-800 text-slate-200 placeholder-slate-500 border border-slate-700 rounded-full px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
-                  />
-                  <button
-                    type="submit"
-                    disabled={!inputText.trim() || connectionState !== ConnectionState.CONNECTED}
-                    className="p-3 bg-blue-600 text-white rounded-full hover:bg-blue-500 disabled:opacity-50 disabled:bg-slate-800 disabled:cursor-not-allowed transition-all shadow-lg shadow-blue-900/20"
-                  >
-                    <Send className="w-5 h-5" />
-                  </button>
-                </form>
-              </div>
+                      <div className="flex-1 overflow-y-auto p-4 space-y-4 min-h-0 bg-slate-900/30">
+                        {logs.length === 0 && (
+                          <div className="h-full flex flex-col items-center justify-center text-slate-600 space-y-2">
+                            <Activity className="w-8 h-8 opacity-20" />
+                            <p className="text-sm italic">Conversation history will appear here...</p>
+                          </div>
+                        )}
+                        {logs.map((log) => (
+                          <div 
+                            key={log.id} 
+                            className={`flex flex-col ${
+                              log.sender === 'user' ? 'items-end' : 
+                              log.sender === 'ai' ? 'items-start' : 'items-center'
+                            }`}
+                          >
+                            <div className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm shadow-md ${
+                              log.sender === 'user' ? 'bg-blue-600 text-white rounded-br-none' : 
+                              log.sender === 'ai' ? 'bg-slate-700 text-slate-200 rounded-bl-none' : 
+                              'bg-slate-800/50 text-slate-500 text-xs italic border border-slate-700'
+                            }`}>
+                              <SmoothText text={log.message} isFinal={log.isFinal} />
+                            </div>
+                            {log.sender !== 'system' && (
+                              <div className="flex items-center gap-2 mt-1 px-1">
+                                 <span className="text-[10px] text-slate-600 font-mono">
+                                  {new Date(log.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second: '2-digit'})}
+                                </span>
+                                {log.sender === 'ai' && log.responseTime !== undefined && (
+                                  <span className="flex items-center text-[10px] text-emerald-500 bg-emerald-500/10 px-1 rounded">
+                                     <Clock className="w-3 h-3 mr-1" />
+                                     {(log.responseTime / 1000).toFixed(2)}s
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                        <div ref={logsEndRef} />
+                      </div>
+
+                      <div className="p-4 bg-slate-900 border-t border-slate-700">
+                        <form onSubmit={handleSendText} className="flex gap-2">
+                          <input
+                            type="text"
+                            value={inputText}
+                            onChange={(e) => setInputText(e.target.value)}
+                            disabled={connectionState !== ConnectionState.CONNECTED}
+                            placeholder={connectionState === ConnectionState.CONNECTED ? "Type a message..." : "Connect to chat..."}
+                            className="flex-1 bg-slate-800 text-slate-200 placeholder-slate-500 border border-slate-700 rounded-full px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                          />
+                          <button
+                            type="submit"
+                            disabled={!inputText.trim() || connectionState !== ConnectionState.CONNECTED}
+                            className="p-3 bg-blue-600 text-white rounded-full hover:bg-blue-500 disabled:opacity-50 disabled:bg-slate-800 disabled:cursor-not-allowed transition-all shadow-lg shadow-blue-900/20"
+                          >
+                            <Send className="w-5 h-5" />
+                          </button>
+                        </form>
+                      </div>
+                  </>
+              ) : (
+                  // TASKS VIEW
+                  activeProjectId ? (
+                      <TodoList 
+                          tasks={activeProject?.tasks || []} 
+                          onAddTask={handleAddTask}
+                          onToggleTask={handleToggleTask}
+                          onDeleteTask={handleDeleteTask}
+                      />
+                  ) : (
+                      <div className="h-full flex flex-col items-center justify-center text-slate-500 p-6 text-center">
+                          <FolderPlus className="w-12 h-12 mb-4 opacity-20" />
+                          <p>Create or select a project to manage tasks.</p>
+                      </div>
+                  )
+              )}
             </div>
 
           </main>

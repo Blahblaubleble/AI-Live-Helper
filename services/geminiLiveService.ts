@@ -1,9 +1,17 @@
-import { GoogleGenAI, LiveServerMessage, Modality, GenerateContentResponse } from "@google/genai";
+import { GoogleGenAI, LiveServerMessage, Modality, GenerateContentResponse, FunctionDeclaration, Type } from "@google/genai";
 import { createPcmBlob, decodeAudioData, base64ToUint8Array, arrayBufferToBase64 } from "./audioUtils";
 import { UsageStats } from "../types";
 
 // LiveSession is not exported from the SDK, so we derive it from the return type of connect()
 type LiveSession = Awaited<ReturnType<GoogleGenAI['live']['connect']>>;
+
+export interface ToolExecutors {
+  createProject: (name: string) => string;
+  switchProject: (name: string) => string;
+  addTask: (title: string, priority: string) => string;
+  markTaskComplete: (title: string) => string;
+  getTasks: () => string;
+}
 
 interface LiveServiceCallbacks {
   onConnect: () => void;
@@ -11,7 +19,68 @@ interface LiveServiceCallbacks {
   onError: (error: Error) => void;
   onTranscript: (text: string, sender: 'user' | 'ai' | 'system', isFinal: boolean, responseTime?: number) => void;
   onStats: (stats: UsageStats) => void;
+  toolExecutors: ToolExecutors;
 }
+
+const TOOLS: FunctionDeclaration[] = [
+  {
+    name: "create_project",
+    description: "Create a new project workspace with the given name and automatically switch to it.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        name: { type: Type.STRING, description: "The name of the new project" }
+      },
+      required: ["name"]
+    }
+  },
+  {
+    name: "switch_project",
+    description: "Switch the active workspace to an existing project by matching its name.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        name: { type: Type.STRING, description: "The name of the project to switch to" }
+      },
+      required: ["name"]
+    }
+  },
+  {
+    name: "add_task",
+    description: "Add a new to-do task to the currently active project.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        title: { type: Type.STRING, description: "The content or title of the task" },
+        priority: { 
+            type: Type.STRING, 
+            description: "Priority level of the task",
+            enum: ["Low", "Medium", "High"]
+        }
+      },
+      required: ["title"]
+    }
+  },
+  {
+    name: "mark_task_complete",
+    description: "Mark a task as completed in the current project by finding a task that matches the title.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        title: { type: Type.STRING, description: "The title or partial title of the task to complete" }
+      },
+      required: ["title"]
+    }
+  },
+  {
+    name: "get_tasks",
+    description: "Get the list of all tasks in the current project to see what needs to be done.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {},
+    }
+  }
+];
 
 export class GeminiLiveService {
   private ai: GoogleGenAI;
@@ -152,8 +221,9 @@ export class GeminiLiveService {
         },
         config: {
           responseModalities: [Modality.AUDIO],
-          // UPDATED INSTRUCTION: Be more assertive about visual capabilities.
-          systemInstruction: "You are a helpful AI assistant that can see the user's screen. The user is sharing their screen with you via a continuous stream of images. ALWAYS use the visual information from these images to answer questions. If the user asks 'what do you see' or about specific content on the screen, describe the latest image you received. Do not say you cannot see the screen unless you genuinely have received no image data at all. Be concise and conversational.",
+          // Provide the tools to the model
+          tools: [{ functionDeclarations: TOOLS }],
+          systemInstruction: "You are ScreenSentinel, an expert AI co-pilot. You can see the user's screen and hear their voice. You have access to tools to manage their Project and To-Do list directly. If the user asks to create a project, add a task, or check something off, USE THE TOOLS. Do not just say you will do it. Use the `get_tasks` tool if the user asks to read the list or asks what they need to do. Always confirm the action briefly.",
           inputAudioTranscription: {},
           outputAudioTranscription: {},
         }
@@ -209,7 +279,54 @@ export class GeminiLiveService {
       this.currentTurnLatency = undefined; // Reset latency for the new turn
     }
 
-    // 1. Handle Audio Output (From Live API)
+    // 1. Handle Tool Calls
+    if (message.toolCall) {
+        // Execute tool logic
+        const responses = [];
+        for (const fc of message.toolCall.functionCalls) {
+            let result = "Unknown tool.";
+            try {
+                const args = fc.args as any;
+                switch(fc.name) {
+                    case 'create_project':
+                        result = this.callbacks.toolExecutors.createProject(args.name);
+                        break;
+                    case 'switch_project':
+                        result = this.callbacks.toolExecutors.switchProject(args.name);
+                        break;
+                    case 'add_task':
+                        result = this.callbacks.toolExecutors.addTask(args.title, args.priority || 'Medium');
+                        break;
+                    case 'mark_task_complete':
+                        result = this.callbacks.toolExecutors.markTaskComplete(args.title);
+                        break;
+                    case 'get_tasks':
+                        result = this.callbacks.toolExecutors.getTasks();
+                        break;
+                }
+            } catch (e: any) {
+                result = `Error executing tool: ${e.message}`;
+            }
+
+            responses.push({
+                id: fc.id,
+                name: fc.name,
+                response: { result }
+            });
+            
+            // Log tool execution as a system message
+            this.callbacks.onTranscript(`[Tool Executed: ${fc.name}] -> ${result}`, 'system', true);
+        }
+
+        // Send results back to model
+        if (this.session && responses.length > 0) {
+            this.session.sendToolResponse({
+                functionResponses: responses
+            });
+        }
+    }
+
+    // 2. Handle Audio Output (From Live API)
     const base64Audio = message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
     if (base64Audio) {
       // Calculate latency if this is the first response after user input
@@ -231,13 +348,13 @@ export class GeminiLiveService {
       }
     }
 
-    // 2. Handle Interruption
+    // 3. Handle Interruption
     if (message.serverContent?.interrupted) {
       this.stopAudioOutput();
       this.responsePending = false; // Reset if interrupted
     }
 
-    // 3. Handle Transcriptions (Streaming)
+    // 4. Handle Transcriptions (Streaming)
     if (message.serverContent?.outputTranscription) {
       this.currentOutputTranscription += message.serverContent.outputTranscription.text;
       // Pass the calculated latency if we have it
@@ -275,25 +392,27 @@ export class GeminiLiveService {
     const source = this.outputAudioContext.createBufferSource();
     source.buffer = buffer;
     
-    // Create a GainNode for smoothing (anti-pop)
+    // Create a GainNode for smoothing (anti-pop) only at start
     const gainNode = this.outputAudioContext.createGain();
     source.connect(gainNode);
     gainNode.connect(this.outputAudioContext.destination);
 
     const currentTime = this.outputAudioContext.currentTime;
     
-    // SAFETY BUFFER: If we are starting from silence or a gap, add a small lookahead (50ms).
+    // If nextStartTime is in the past, it means there was a silence gap or this is the start of a turn.
+    // We add a tiny buffer to avoid cutting off the first millisecond.
     if (this.nextStartTime < currentTime) {
         this.nextStartTime = currentTime + 0.05; 
+        
+        // Only apply fade-in if we are starting fresh (prevent pop on attack)
+        gainNode.gain.setValueAtTime(0, this.nextStartTime);
+        gainNode.gain.linearRampToValueAtTime(1, this.nextStartTime + 0.02);
+    } else {
+        // Continuous stream: Keep gain at 1, do NOT fade between chunks
+        gainNode.gain.setValueAtTime(1, this.nextStartTime);
     }
 
-    // Apply micro-fades to prevent clicking at chunk boundaries
-    const FADE_DURATION = 0.005; // 5ms
-    gainNode.gain.setValueAtTime(0, this.nextStartTime);
-    gainNode.gain.linearRampToValueAtTime(1, this.nextStartTime + FADE_DURATION);
-    gainNode.gain.setValueAtTime(1, this.nextStartTime + buffer.duration - FADE_DURATION);
-    gainNode.gain.linearRampToValueAtTime(0, this.nextStartTime + buffer.duration);
-
+    // Schedule the playback
     source.start(this.nextStartTime);
     
     this.nextStartTime += buffer.duration;

@@ -240,8 +240,7 @@ export const SupabaseDB: Database = {
 
   async incrementDailyStats(username: string): Promise<number> {
     if (!supabase) return 0;
-    // Explicitly reference SupabaseDB to avoid context loss on 'this'
-    const current = await SupabaseDB.getDailyStats(username);
+    const current = await this.getDailyStats(username);
     const newVal = current + 1;
     const today = new Date().toDateString();
     
