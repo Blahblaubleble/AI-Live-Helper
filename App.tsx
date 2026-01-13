@@ -5,12 +5,9 @@ import LoginPage from './components/LoginPage';
 import TodoList from './components/TodoList'; 
 import { db } from './services/database';
 import { ConnectionState, LogEntry, UsageStats, Project, User, Task } from './types';
-import { Play, Square, AlertCircle, Mic, MicOff, Monitor, Send, Clock, Activity, Video, VideoOff, FolderPlus, Folder, Trash2, Zap, LogOut, User as UserIcon, Download, X, ListTodo, MessageSquare } from 'lucide-react';
+import { Play, Mic, MicOff, Monitor, ArrowRight, Video, VideoOff, Folder, Trash2, Zap, Plus, X, ListTodo, MessageSquare, Sun, Moon, LogOut, Download } from 'lucide-react';
 
-const FREE_TIER_LIMITS = {
-  TPM: 1000000, 
-  RPD: 1500     
-};
+const FREE_TIER_LIMITS = { TPM: 1000000, RPD: 1500 };
 
 const SmoothText = ({ text, isFinal }: { text: string; isFinal?: boolean }) => {
   const [displayedText, setDisplayedText] = useState(isFinal ? text : '');
@@ -24,7 +21,6 @@ const SmoothText = ({ text, isFinal }: { text: string; isFinal?: boolean }) => {
        }
        return;
     }
-
     const interval = setInterval(() => {
       if (indexRef.current < text.length) {
         const remaining = text.length - indexRef.current;
@@ -33,66 +29,50 @@ const SmoothText = ({ text, isFinal }: { text: string; isFinal?: boolean }) => {
         else if (remaining > 20) step = 3;
         else if (remaining > 10) step = 2;
         if (isFinal && remaining > 5) step = Math.max(step, 4);
-
         indexRef.current = Math.min(text.length, indexRef.current + step);
         setDisplayedText(text.slice(0, indexRef.current));
       } else {
         clearInterval(interval);
       }
     }, 15);
-
     return () => clearInterval(interval);
   }, [text, isFinal]);
-
   return <span className="whitespace-pre-wrap">{displayedText}</span>;
 };
 
-const UsageBar = ({ label, current, max, unit }: { label: string, current: number, max: number, unit: string }) => {
+const UsageBar = ({ label, current, max }: { label: string, current: number, max: number, unit: string }) => {
   const percentage = Math.min(100, Math.max(0, (current / max) * 100));
-  let colorClass = "bg-blue-500";
-  if (percentage > 75) colorClass = "bg-yellow-500";
-  if (percentage > 90) colorClass = "bg-red-500";
-
   return (
-    <div className="bg-slate-800 p-4 rounded-xl border border-slate-700 flex flex-col gap-2">
-      <div className="flex justify-between items-end">
-        <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">{label}</span>
-        <span className="text-sm font-mono text-slate-200">
-          {current.toLocaleString()} <span className="text-slate-500">/ {max.toLocaleString()} {unit}</span>
+    <div className="flex flex-col gap-1 w-full">
+      <div className="flex justify-between items-end px-1">
+        <span className="text-[10px] font-semibold text-slate-500 dark:text-white/40 uppercase tracking-wide">{label}</span>
+        <span className="text-[10px] font-mono text-slate-700 dark:text-white/60">
+          {current.toLocaleString()} / {max.toLocaleString()}
         </span>
       </div>
-      <div className="w-full h-3 bg-slate-900 rounded-full overflow-hidden border border-slate-700/50">
-        <div className={`h-full ${colorClass} transition-all duration-500 ease-out`} style={{ width: `${percentage}%` }} />
+      <div className="w-full h-1.5 bg-black/5 dark:bg-white/10 rounded-full overflow-hidden">
+        <div className={`h-full bg-blue-500/60 dark:bg-white/60 transition-all duration-500 ease-out`} style={{ width: `${percentage}%` }} />
       </div>
     </div>
   );
 };
 
 const App: React.FC = () => {
-  // Auth State
+  const [theme, setTheme] = useState<'dark' | 'light'>('dark');
   const [user, setUser] = useState<User | null>(null);
-
   const [connectionState, setConnectionState] = useState<ConnectionState>(ConnectionState.IDLE);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoPaused, setIsVideoPaused] = useState(false);
   const [inputText, setInputText] = useState('');
   const [logs, setLogs] = useState<LogEntry[]>([]);
-  
-  // Project State
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [isDataLoaded, setIsDataLoaded] = useState(false);
-  
-  // View Mode State (Menu Selection)
   const [viewMode, setViewMode] = useState<'chat' | 'tasks'>('chat');
-  
-  // Create Project Modal State
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
   const newProjectInputRef = useRef<HTMLInputElement>(null);
-
-  // Real-time stats
   const [stats, setStats] = useState<UsageStats>({ imagesSent: 0, modelTurns: 0, estimatedTokens: 0, tokensPerMinute: 0 });
   const [dailyRequests, setDailyRequests] = useState(0);
 
@@ -101,78 +81,52 @@ const App: React.FC = () => {
   const isScreenSharingRef = useRef(false);
   const logsEndRef = useRef<HTMLDivElement>(null);
   
-  // Refs to track state for callbacks without triggering re-renders of the service
   const logsRef = useRef<LogEntry[]>([]);
   const projectsRef = useRef<Project[]>([]);
   const activeProjectIdRef = useRef<string | null>(null);
 
-  // Update refs whenever state changes
+  // Sync refs
   useEffect(() => { logsRef.current = logs; }, [logs]);
   useEffect(() => { projectsRef.current = projects; }, [projects]);
   useEffect(() => { activeProjectIdRef.current = activeProjectId; }, [activeProjectId]);
 
-  // Load persistence via DB Service
+  // Load Data
   useEffect(() => {
     if (!user) return;
-
     const loadData = async () => {
-        // Load Daily Stats
         const count = await db.getDailyStats(user.username);
         setDailyRequests(count);
-
-        // Load Projects
         const loadedProjects = await db.getProjects(user.username);
         setProjects(loadedProjects);
-        
         setIsDataLoaded(true);
     };
-
     loadData();
   }, [user]);
 
-  // Sync Logs to Projects & Persist (Debounced)
+  // Auto-save
   useEffect(() => {
     if (!user || !isDataLoaded || !activeProjectId) return;
-
     const syncAndSave = () => {
-        // Access refs directly to ensure latest state without stale closures
         const currentProjects = projectsRef.current;
         const currentLogs = logsRef.current;
-        
-        // Calculate new project state
         const updatedProjects = currentProjects.map(p => {
             if (p.id === activeProjectId) {
                 return { ...p, logs: currentLogs, lastActive: new Date().toISOString() };
             }
             return p;
         });
-        
-        // 1. Update React State
         setProjects(updatedProjects);
-        
-        // 2. Perform Side Effect (DB Save) OUTSIDE of the state setter
         db.saveProjects(user.username, updatedProjects).catch(err => console.error("Auto-save failed", err));
     };
-
-    // Save every 2 seconds if there are changes, or on unmount
     const intervalId = setInterval(syncAndSave, 2000);
-
     return () => {
         clearInterval(intervalId);
-        syncAndSave(); // Save on cleanup (project switch/unmount)
+        syncAndSave();
     };
   }, [activeProjectId, user, isDataLoaded]); 
 
-  // Focus input when modal opens
+  // Initialize Service
   useEffect(() => {
-    if (isCreateModalOpen && newProjectInputRef.current) {
-        setTimeout(() => newProjectInputRef.current?.focus(), 100);
-    }
-  }, [isCreateModalOpen]);
-
-  // Initialize service
-  useEffect(() => {
-    // Define Tool Logic here to access React Setters via closure
     const toolExecutors: ToolExecutors = {
         createProject: (name) => {
             if (!user) return "Error: No user logged in.";
@@ -184,27 +138,18 @@ const App: React.FC = () => {
                 logs: [],
                 tasks: []
             };
-            
-            // Optimistic Update
             const updated = [...projectsRef.current, newProject];
             setProjects(updated);
             db.saveProjects(user.username, updated);
-            
-            // Switch to it
             setActiveProjectId(newProject.id);
-            setLogs([]); // Clear logs for new context
-            setViewMode('tasks'); // Show them the new project list
-            
-            return `Project '${name}' created and set as active.`;
+            setLogs([]);
+            setViewMode('tasks');
+            return `Project '${name}' created.`;
         },
-
         switchProject: (name) => {
             if (!user) return "Error: No user logged in.";
             const project = projectsRef.current.find(p => p.name.toLowerCase().includes(name.toLowerCase()));
-            
             if (project) {
-                // Save current state before switching? 
-                // The debounce effect will handle latest save, but we force one here for safety
                 if (activeProjectIdRef.current) {
                      const currentId = activeProjectIdRef.current;
                      const updatedProjects = projectsRef.current.map(p => {
@@ -216,23 +161,17 @@ const App: React.FC = () => {
                      db.saveProjects(user.username, updatedProjects);
                      setProjects(updatedProjects);
                 }
-
                 setActiveProjectId(project.id);
                 setLogs(project.logs || []);
                 return `Switched to project '${project.name}'.`;
             }
-            return `Project '${name}' not found. Available projects: ${projectsRef.current.map(p => p.name).join(', ')}`;
+            return `Project '${name}' not found.`;
         },
-
         addTask: (title, priority) => {
-            if (!activeProjectIdRef.current) return "No active project. Please create or select a project first.";
-            
-            // Valid priority check
+            if (!activeProjectIdRef.current) return "No active project.";
             const validPriority = (['Low', 'Medium', 'High'].includes(priority) ? priority : 'Medium') as 'Low'|'Medium'|'High';
-            
             const today = new Date();
             today.setHours(23, 59, 59, 999);
-
             const newTask: Task = {
                 id: Math.random().toString(36).substring(2, 9),
                 title: title,
@@ -241,27 +180,20 @@ const App: React.FC = () => {
                 dueDate: today.toISOString(),
                 createdAt: new Date().toISOString(),
             };
-
             setProjects(prev => prev.map(p => {
                 if (p.id === activeProjectIdRef.current) {
                     return { ...p, tasks: [...(p.tasks || []), newTask], lastActive: new Date().toISOString() };
                 }
                 return p;
             }));
-            
-            setViewMode('tasks'); // Auto-switch view to show the user
-            return `Task '${title}' added with ${validPriority} priority.`;
+            setViewMode('tasks');
+            return `Task '${title}' added.`;
         },
-
         markTaskComplete: (title) => {
              if (!activeProjectIdRef.current) return "No active project.";
-             
              const currentProject = projectsRef.current.find(p => p.id === activeProjectIdRef.current);
              if (!currentProject) return "Active project not found.";
-             
-             // Fuzzy search
              const task = currentProject.tasks.find(t => t.title.toLowerCase().includes(title.toLowerCase()));
-             
              if (task) {
                  setProjects(prev => prev.map(p => {
                     if (p.id === activeProjectIdRef.current) {
@@ -276,34 +208,20 @@ const App: React.FC = () => {
                 setViewMode('tasks');
                 return `Task '${task.title}' marked as complete.`;
              }
-             return `Could not find a task matching '${title}'.`;
+             return `Task '${title}' not found.`;
         },
-
         getTasks: () => {
              if (!activeProjectIdRef.current) return "No active project.";
              const currentProject = projectsRef.current.find(p => p.id === activeProjectIdRef.current);
              if (!currentProject) return "Active project not found.";
-             
              const allTasks = currentProject.tasks || [];
              if (allTasks.length === 0) return "The to-do list is empty.";
-
              const pending = allTasks.filter(t => !t.completed).map(t => `- [ ] ${t.title} (${t.priority})`);
              const completed = allTasks.filter(t => t.completed).map(t => `- [x] ${t.title}`);
-             
              let response = "";
-             if (pending.length > 0) {
-                 response += `Here are the pending tasks:\n${pending.join('\n')}`;
-             } else {
-                 response += "No pending tasks! Great job.";
-             }
-             
-             if (completed.length > 0) {
-                 response += `\n\nRecently completed:\n${completed.join('\n')}`;
-             }
-             
-             // Auto-switch to view so user can follow along
+             if (pending.length > 0) response += `Here are the pending tasks:\n${pending.join('\n')}`;
+             if (completed.length > 0) response += `\n\nCompleted:\n${completed.join('\n')}`;
              setViewMode('tasks'); 
-             
              return response;
         }
     };
@@ -312,17 +230,10 @@ const App: React.FC = () => {
       onConnect: () => {
         setConnectionState(ConnectionState.CONNECTED);
         addLog('system', 'Connected to Gemini Live Agent.');
-        
-        // Update stats
         if (user) {
-            db.incrementDailyStats(user.username).then(newCount => {
-                setDailyRequests(newCount);
-            });
+            db.incrementDailyStats(user.username).then(newCount => setDailyRequests(newCount));
         }
-
-        if (isScreenSharingRef.current) {
-             serviceRef.current?.notifyScreenStart();
-        }
+        if (isScreenSharingRef.current) serviceRef.current?.notifyScreenStart();
       },
       onDisconnect: () => {
         setConnectionState(ConnectionState.IDLE);
@@ -335,7 +246,6 @@ const App: React.FC = () => {
       },
       onTranscript: (text, sender, isFinal, responseTime) => {
         setLogs(prev => {
-          // Find the last log from this sender that is NOT final
           let matchIndex = -1;
           for (let i = prev.length - 1; i >= 0; i--) {
               if (prev[i].sender === sender && !prev[i].isFinal) {
@@ -343,7 +253,6 @@ const App: React.FC = () => {
                   break;
               }
           }
-
           if (matchIndex !== -1) {
             const updatedLogs = [...prev];
             updatedLogs[matchIndex] = {
@@ -366,17 +275,14 @@ const App: React.FC = () => {
           }
         });
       },
-      onStats: (newStats) => {
-        setStats({ ...newStats });
-      },
-      toolExecutors // Pass the tool handlers defined above
+      onStats: (newStats) => setStats({ ...newStats }),
+      toolExecutors
     });
 
-    return () => {
-      serviceRef.current?.disconnect();
-    };
-  }, [user]); // Re-create service if user changes (rare, essentially only on login)
+    return () => serviceRef.current?.disconnect();
+  }, [user]);
 
+  // Scroll to bottom
   useEffect(() => {
     if (viewMode === 'chat') {
         logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -394,13 +300,8 @@ const App: React.FC = () => {
   };
 
   const handleLogout = () => {
-    if (connectionState === ConnectionState.CONNECTED) {
-        handleStop();
-    }
-    
-    // Force one last save before clearing
+    if (connectionState === ConnectionState.CONNECTED) handleStop();
     if (user && activeProjectId) {
-         // Direct access via ref to avoid state closure issues
          const currentProjects = projectsRef.current;
          const updatedProjects = currentProjects.map(p => {
             if (p.id === activeProjectId) {
@@ -410,42 +311,34 @@ const App: React.FC = () => {
          });
          db.saveProjects(user.username, updatedProjects);
     }
-
     setUser(null);
-    setIsDataLoaded(false); // Reset persistence lock
+    setIsDataLoaded(false);
     setProjects([]);
     setActiveProjectId(null);
     setLogs([]);
     setDailyRequests(0);
   };
 
+  // Helper functions
   const handleExportData = async () => {
       if (!user) return;
-      
       const jsonStr = await db.exportData(user.username);
-      
-      // Create Blob
       const blob = new Blob([jsonStr], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `screenSentinel_backup_${user.username}_${new Date().toISOString().split('T')[0]}.json`;
+      a.download = `backup.json`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-      URL.revokeObjectURL(url);
   };
-
-  // Project Management Functions
   const openCreateModal = () => {
       setNewProjectName('');
       setIsCreateModalOpen(true);
   };
-
   const handleCreateProject = (e: React.FormEvent) => {
       e.preventDefault();
       if (!newProjectName.trim()) return;
-      
       const newProject: Project = {
           id: Math.random().toString(36).substring(2, 9),
           name: newProjectName.trim(),
@@ -454,24 +347,14 @@ const App: React.FC = () => {
           logs: [],
           tasks: []
       };
-      // Optimistic update
       const updatedProjects = [...projects, newProject];
       setProjects(updatedProjects);
-      
-      // Save immediately
       if (user) db.saveProjects(user.username, updatedProjects);
-
       selectProject(newProject.id);
       setIsCreateModalOpen(false);
   };
-
   const selectProject = (id: string) => {
-      // Disconnect if active
-      if (connectionState === ConnectionState.CONNECTED) {
-          handleStop();
-      }
-
-      // 1. Save current project if one is active
+      if (connectionState === ConnectionState.CONNECTED) handleStop();
       if (activeProjectId && user) {
         const updatedProjects = projects.map(p => {
             if (p.id === activeProjectId) {
@@ -482,33 +365,25 @@ const App: React.FC = () => {
         setProjects(updatedProjects);
         db.saveProjects(user.username, updatedProjects);
       }
-
-      // 2. Load new project
       const project = projects.find(p => p.id === id);
       if (project) {
           setActiveProjectId(id);
           setLogs(project.logs || []);
-          // Ensure view mode is chat by default on new project
           setViewMode('chat');
       }
   };
-
   const deleteProject = (e: React.MouseEvent, id: string) => {
       e.stopPropagation();
       if (!user) return;
-
       const updated = projects.filter(p => p.id !== id);
       setProjects(updated);
       db.saveProjects(user.username, updated);
-      
       if (activeProjectId === id) {
           setActiveProjectId(null);
           setLogs([]);
       }
   };
-
   const switchToQuickSession = () => {
-      // Save current before switching
       if (activeProjectId && user) {
           const updatedProjects = projects.map(p => {
             if (p.id === activeProjectId) {
@@ -519,16 +394,14 @@ const App: React.FC = () => {
           setProjects(updatedProjects);
           db.saveProjects(user.username, updatedProjects);
       }
-
       if (connectionState === ConnectionState.CONNECTED) handleStop();
       setActiveProjectId(null);
       setLogs([]);
       setViewMode('chat');
   };
-
   const handleStart = () => {
     if (!process.env.API_KEY) {
-      setErrorMsg("API_KEY not found in environment.");
+      setErrorMsg("API_KEY missing");
       setConnectionState(ConnectionState.ERROR);
       return;
     }
@@ -536,519 +409,315 @@ const App: React.FC = () => {
     setConnectionState(ConnectionState.CONNECTING);
     setIsMuted(false);
     setIsVideoPaused(false);
-    
-    if (screenShareRef.current) {
-        screenShareRef.current.start().catch(err => {
-            console.warn("Screen share start failed", err);
-        });
-    }
+    if (screenShareRef.current) screenShareRef.current.start().catch(err => console.warn(err));
     serviceRef.current?.connect();
   };
-
   const handleStop = () => {
     serviceRef.current?.disconnect();
     screenShareRef.current?.stop();
     isScreenSharingRef.current = false;
   };
-
   const handleMuteToggle = () => {
     const newMutedState = !isMuted;
     setIsMuted(newMutedState);
     serviceRef.current?.setMuted(newMutedState);
   };
-  
   const handleVideoPauseToggle = () => {
     const newState = !isVideoPaused;
     setIsVideoPaused(newState);
     serviceRef.current?.notifyVideoStateChange(newState);
-    addLog('system', newState ? "Video monitoring paused." : "Video monitoring resumed.");
   };
-
   const handleSendText = (e?: React.FormEvent) => {
     e?.preventDefault();
     if (!inputText.trim() || connectionState !== ConnectionState.CONNECTED) return;
     serviceRef.current?.sendTextMessage(inputText);
     setInputText('');
   };
-
   const handleVideoFrame = useCallback((base64: string) => {
     if (connectionState === ConnectionState.CONNECTED) {
       serviceRef.current?.sendVideoFrame(base64);
     }
   }, [connectionState]);
 
-  // Task Handlers
+  // Task Wrappers
   const handleAddTask = (task: Task) => {
       if (!activeProjectId) return;
       setProjects(prev => prev.map(p => {
-          if (p.id === activeProjectId) {
-              return { ...p, tasks: [...(p.tasks || []), task], lastActive: new Date().toISOString() };
-          }
+          if (p.id === activeProjectId) return { ...p, tasks: [...(p.tasks || []), task], lastActive: new Date().toISOString() };
           return p;
       }));
   };
-
   const handleToggleTask = (taskId: string) => {
       if (!activeProjectId) return;
       setProjects(prev => prev.map(p => {
-          if (p.id === activeProjectId) {
-              return { 
-                  ...p, 
-                  tasks: (p.tasks || []).map(t => t.id === taskId ? { ...t, completed: !t.completed } : t),
-                  lastActive: new Date().toISOString()
-              };
-          }
+          if (p.id === activeProjectId) return { ...p, tasks: (p.tasks || []).map(t => t.id === taskId ? { ...t, completed: !t.completed } : t), lastActive: new Date().toISOString() };
           return p;
       }));
   };
-
+  const handleEditTask = (taskId: string, newTitle: string) => {
+    if (!activeProjectId) return;
+    setProjects(prev => prev.map(p => {
+        if (p.id === activeProjectId) return { ...p, tasks: (p.tasks || []).map(t => t.id === taskId ? { ...t, title: newTitle } : t), lastActive: new Date().toISOString() };
+        return p;
+    }));
+  };
   const handleDeleteTask = (taskId: string) => {
       if (!activeProjectId) return;
       setProjects(prev => prev.map(p => {
-          if (p.id === activeProjectId) {
-              return { 
-                  ...p, 
-                  tasks: (p.tasks || []).filter(t => t.id !== taskId),
-                  lastActive: new Date().toISOString()
-              };
-          }
+          if (p.id === activeProjectId) return { ...p, tasks: (p.tasks || []).filter(t => t.id !== taskId), lastActive: new Date().toISOString() };
           return p;
       }));
   };
 
-  // Auth Guard
-  if (!user) {
-      return <LoginPage onLogin={setUser} />;
-  }
-
   const activeProject = projects.find(p => p.id === activeProjectId);
 
+  const toggleTheme = () => setTheme(prev => prev === 'dark' ? 'light' : 'dark');
+
   return (
-    <div className="flex h-screen bg-slate-900 text-slate-100 overflow-hidden relative">
-      
-      {/* Create Project Modal */}
-      {isCreateModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-          <div className="bg-slate-900 border border-slate-700 rounded-xl shadow-2xl w-full max-w-md overflow-hidden transform transition-all scale-100">
-            <div className="p-4 border-b border-slate-800 flex justify-between items-center bg-slate-900/50">
-              <h3 className="font-bold text-slate-200 text-lg flex items-center gap-2">
-                <FolderPlus className="w-5 h-5 text-blue-500" />
-                Create New Project
-              </h3>
-              <button 
-                onClick={() => setIsCreateModalOpen(false)} 
-                className="text-slate-500 hover:text-slate-300 transition-colors p-1 rounded-lg hover:bg-slate-800"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            <form onSubmit={handleCreateProject} className="p-6 space-y-4">
-              <div>
-                <label htmlFor="projectName" className="block text-sm font-semibold text-slate-400 mb-2">
-                  Project Name
-                </label>
-                <input
-                  ref={newProjectInputRef}
-                  id="projectName"
-                  type="text"
-                  maxLength={50}
-                  value={newProjectName}
-                  onChange={(e) => setNewProjectName(e.target.value)}
-                  placeholder="e.g., Marketing Dashboard Review"
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-3 text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500/50 placeholder-slate-600 transition-all focus:border-blue-500/50"
-                  autoComplete="off"
-                />
-                <div className="flex justify-end mt-2">
-                   <span className={`text-xs font-mono transition-colors ${
-                      newProjectName.length >= 45 ? 'text-yellow-500' : 'text-slate-600'
-                   }`}>
-                     {newProjectName.length}/50
-                   </span>
-                </div>
-              </div>
-              <div className="flex justify-end gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setIsCreateModalOpen(false)}
-                  className="px-4 py-2 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors text-sm font-medium"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={!newProjectName.trim()}
-                  className="px-6 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-medium text-sm disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-lg shadow-blue-500/20"
-                >
-                  Create Project
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Sidebar - Fixed Width */}
-      <aside 
-        className="w-64 bg-slate-950 border-r border-slate-800 flex flex-col relative shrink-0"
-      >
-        <div className="p-4 border-b border-slate-800 flex items-center justify-between overflow-hidden whitespace-nowrap">
-            <h2 className="font-bold text-slate-200 flex items-center gap-2">
-                <Folder className="w-5 h-5 text-blue-500" />
-                Projects
-            </h2>
-             <button onClick={openCreateModal} className="p-1.5 hover:bg-slate-800 rounded-lg text-blue-400 transition-colors" title="New Project">
-                <FolderPlus className="w-5 h-5" />
-            </button>
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-2 space-y-1">
-             <button
-                onClick={switchToQuickSession}
-                className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors flex items-center gap-2 ${
-                    !activeProjectId ? 'bg-blue-600/20 text-blue-300 border border-blue-500/30' : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200'
-                }`}
-             >
-                <Zap className="w-4 h-4" />
-                Quick Session
-             </button>
-
-             <div className="h-px bg-slate-800 my-2" />
-
-             {projects.map(p => (
-                 <div 
-                    key={p.id}
-                    onClick={() => selectProject(p.id)}
-                    className={`group w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm cursor-pointer transition-colors ${
-                        activeProjectId === p.id ? 'bg-slate-800 text-slate-100 border border-slate-700' : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200'
-                    }`}
-                 >
-                    <div className="flex flex-col truncate">
-                        <span className="truncate font-medium">{p.name}</span>
-                        <span className="text-[10px] text-slate-600">{new Date(p.lastActive).toLocaleDateString()}</span>
-                    </div>
-                    <button 
-                        onClick={(e) => deleteProject(e, p.id)}
-                        className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-red-500/20 hover:text-red-400 rounded transition-all"
-                        title="Delete Project"
-                    >
-                        <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                 </div>
-             ))}
-
-             {projects.length === 0 && (
-                 <div className="text-center text-xs text-slate-600 mt-4 italic">No saved projects</div>
-             )}
-        </div>
-        
-        {/* User Footer */}
-        <div className="p-3 border-t border-slate-800 bg-slate-950/50 space-y-2">
-            <div className="flex items-center justify-between rounded-lg bg-slate-900 p-2 border border-slate-800">
-                <div className="flex items-center gap-2 overflow-hidden">
-                    <div className="w-7 h-7 rounded-full bg-indigo-500/20 flex items-center justify-center text-indigo-400">
-                        <UserIcon className="w-4 h-4" />
-                    </div>
-                    <div className="flex flex-col truncate">
-                        <span className="text-xs font-bold text-slate-200 truncate max-w-[90px]">{user.username}</span>
-                        <span className="text-[10px] text-emerald-500 flex items-center gap-1">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                            Secure
-                        </span>
-                    </div>
-                </div>
-                <button 
-                    onClick={handleLogout}
-                    className="p-1.5 text-slate-500 hover:text-red-400 hover:bg-red-500/10 rounded-md transition-all"
-                    title="Logout"
-                >
-                    <LogOut className="w-4 h-4" />
-                </button>
-            </div>
-            
-            <button 
-                onClick={handleExportData}
-                className="w-full flex items-center justify-center gap-2 py-1.5 text-xs text-slate-500 hover:text-blue-400 bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded-lg transition-colors"
-            >
-                <Download className="w-3 h-3" />
-                Backup Data
-            </button>
-        </div>
-      </aside>
-
-      {/* Main Content */}
-      <div className="flex-1 flex flex-col min-w-0">
-          
-          {/* Top Bar */}
-          <header className="h-16 bg-slate-900 border-b border-slate-800 flex items-center justify-between px-4 md:px-8">
-            <div className="flex items-center gap-4">
-                <div>
-                    <h1 className="text-xl font-bold bg-gradient-to-r from-blue-400 to-emerald-400 bg-clip-text text-transparent flex items-center gap-2">
-                        ScreenSentinel AI
-                        {activeProjectId && <span className="text-slate-500 text-sm font-normal hidden md:inline"> / {activeProject?.name}</span>}
-                    </h1>
-                </div>
-            </div>
-
-            {/* View Switcher Menu */}
-            <div className="flex bg-slate-800/50 p-1 rounded-lg border border-slate-700/50 backdrop-blur-sm">
-                <button 
-                    onClick={() => setViewMode('chat')}
-                    className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${
-                        viewMode === 'chat' 
-                        ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' 
-                        : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
-                    }`}
-                >
-                    <MessageSquare className="w-4 h-4" />
-                    AI Chat
-                </button>
-                <button 
-                    onClick={() => setViewMode('tasks')}
-                    className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${
-                        viewMode === 'tasks' 
-                        ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' 
-                        : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
-                    }`}
-                >
-                    <ListTodo className="w-4 h-4" />
-                    To-Do List
-                    {activeProject?.tasks?.filter(t => !t.completed).length ? (
-                        <span className="bg-white/20 text-white text-[10px] px-1.5 py-0.5 rounded-full ml-1">
-                            {activeProject.tasks.filter(t => !t.completed).length}
-                        </span>
-                    ) : null}
-                </button>
-            </div>
-
-            <div className="flex items-center space-x-3">
-              <div className={`px-3 py-1 rounded-full text-xs font-medium border flex items-center gap-2 ${
-                connectionState === ConnectionState.CONNECTED 
-                ? 'bg-green-500/10 text-green-400 border-green-500/20' 
-                : connectionState === ConnectionState.CONNECTING
-                ? 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20'
-                : 'bg-slate-800 text-slate-400 border-slate-700'
-              }`}>
-                <div className={`w-2 h-2 rounded-full ${
-                    connectionState === ConnectionState.CONNECTED ? 'bg-green-500 animate-pulse' : 
-                    connectionState === ConnectionState.CONNECTING ? 'bg-yellow-500 animate-bounce' : 'bg-slate-500'
-                }`} />
-                {connectionState}
-              </div>
-            </div>
-          </header>
-
-          <main className="flex-1 grid grid-cols-1 lg:grid-cols-3 gap-6 p-4 md:p-6 overflow-hidden">
-            
-            {/* Left Column: Screen & Controls */}
-            <div className="lg:col-span-2 flex flex-col gap-6 overflow-y-auto">
-              
-              <div className="flex-1 bg-slate-800 rounded-2xl p-1 shadow-xl border border-slate-700 relative min-h-[350px] flex flex-col">
-                {connectionState === ConnectionState.IDLE && (
-                  <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-slate-900/90 backdrop-blur-sm rounded-xl p-6 text-center">
-                    <Monitor className="w-16 h-16 text-slate-600 mb-4" />
-                    <h3 className="text-xl font-semibold text-slate-300">
-                        {activeProjectId ? `Ready to resume "${activeProject?.name}"` : "Ready to Monitor"}
-                    </h3>
-                    <p className="text-slate-500 max-w-md mt-2 mb-8">
-                       {activeProjectId ? "History is loaded. Connect to resume the session." : "Connect to start the AI agent. It will watch your screen and listen to your voice commands."}
-                    </p>
-                    <button
-                      onClick={handleStart}
-                      className="flex items-center gap-2 px-8 py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-full font-bold shadow-lg shadow-blue-500/20 transition-all transform hover:scale-105"
-                    >
-                      <Play className="w-5 h-5" fill="currentColor" />
-                      {activeProjectId ? "RESUME SESSION" : "START AGENT"}
-                    </button>
-                  </div>
-                )}
-                
-                {connectionState === ConnectionState.ERROR && (
-                  <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-red-900/20 backdrop-blur-sm rounded-xl border border-red-500/30">
-                    <AlertCircle className="w-16 h-16 text-red-500 mb-4" />
-                    <h3 className="text-xl font-semibold text-red-400">Connection Error</h3>
-                    <p className="text-red-200 mt-2">{errorMsg}</p>
-                    <button onClick={() => setConnectionState(ConnectionState.IDLE)} className="mt-6 px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded text-sm">Dismiss</button>
-                  </div>
-                )}
-
-                <div className="flex-1 relative rounded-xl overflow-hidden bg-black">
-                     <ScreenShare 
-                      ref={screenShareRef}
-                      isActive={connectionState === ConnectionState.CONNECTED}
-                      isPaused={isVideoPaused}
-                      onFrame={handleVideoFrame}
-                      onStop={() => {
-                          isScreenSharingRef.current = false;
-                          handleStop();
-                      }}
-                      onStart={() => {
-                          isScreenSharingRef.current = true;
-                          if (connectionState === ConnectionState.CONNECTED) {
-                              serviceRef.current?.notifyScreenStart();
-                          }
-                      }}
-                    />
-                </div>
-              </div>
-
-              {/* Control Bar */}
-              <div className="bg-slate-800 rounded-2xl border border-slate-700 p-4 flex flex-wrap items-center justify-between gap-4">
-                <div className="flex items-center gap-3">
-                   <div className={`p-2 rounded-lg ${connectionState === ConnectionState.CONNECTED ? 'bg-green-500/20 text-green-400' : 'bg-slate-700/50 text-slate-500'}`}>
-                      {connectionState === ConnectionState.CONNECTED && !isVideoPaused ? <Video className="w-5 h-5" /> : <VideoOff className="w-5 h-5" />}
-                   </div>
-                   <div className="flex flex-col">
-                        <span className="text-sm font-medium text-slate-200">
-                             {connectionState === ConnectionState.CONNECTED ? "Session Active" : "Session Idle"}
-                        </span>
-                        <span className="text-xs text-slate-500">
-                             {connectionState === ConnectionState.CONNECTED 
-                                ? (isVideoPaused ? "Audio Only (Video Paused)" : "Monitoring Screen & Audio")
-                                : "Waiting to start..."}
-                        </span>
-                   </div>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={handleMuteToggle}
-                    disabled={connectionState !== ConnectionState.CONNECTED}
-                    className={`p-3 rounded-full transition-colors ${
-                      isMuted 
-                        ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30' 
-                        : 'bg-slate-700 hover:bg-slate-600 text-blue-400'
-                    } disabled:opacity-50`}
-                    title={isMuted ? "Unmute" : "Mute"}
-                  >
-                    {isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
-                  </button>
-                  
-                   <button
-                    onClick={handleVideoPauseToggle}
-                    disabled={connectionState !== ConnectionState.CONNECTED}
-                    className={`p-3 rounded-full transition-colors ${
-                      isVideoPaused 
-                        ? 'bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30' 
-                        : 'bg-slate-700 hover:bg-slate-600 text-emerald-400'
-                    } disabled:opacity-50`}
-                    title={isVideoPaused ? "Resume Video" : "Pause Video"}
-                  >
-                    {isVideoPaused ? <VideoOff className="w-5 h-5" /> : <Video className="w-5 h-5" />}
-                  </button>
-
-                  {connectionState === ConnectionState.CONNECTED && (
-                   <button 
-                    onClick={handleStop}
-                    className="p-3 bg-red-500/10 hover:bg-red-500/20 text-red-500 rounded-full transition border border-red-500/30"
-                    title="Stop Session"
-                   >
-                     <Square className="w-5 h-5" fill="currentColor" />
-                   </button>
-                 )}
-                </div>
-              </div>
-              
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                 <UsageBar label="Speed (TPM)" current={stats.tokensPerMinute} max={FREE_TIER_LIMITS.TPM} unit="TPM" />
-                 <UsageBar label="Daily Requests" current={dailyRequests} max={FREE_TIER_LIMITS.RPD} unit="Reqs" />
-              </div>
-
-            </div>
-
-            {/* Right Column: Dynamic Content (Chat OR Tasks) */}
-            <div className="bg-slate-800 rounded-2xl border border-slate-700 flex flex-col overflow-hidden max-h-[calc(100vh-8rem)] shadow-lg">
-              
-              {viewMode === 'chat' ? (
-                  <>
-                      <div className="p-4 border-b border-slate-700 bg-slate-800/80 backdrop-blur flex justify-between items-center">
-                        <h2 className="font-semibold text-slate-300 flex items-center gap-2">
-                            <Activity className="w-4 h-4 text-blue-400" />
-                            Transcript
-                        </h2>
-                        <div className="text-xs text-slate-500 font-mono">
-                           {stats.modelTurns} turns
-                        </div>
-                      </div>
-
-                      <div className="flex-1 overflow-y-auto p-4 space-y-4 min-h-0 bg-slate-900/30">
-                        {logs.length === 0 && (
-                          <div className="h-full flex flex-col items-center justify-center text-slate-600 space-y-2">
-                            <Activity className="w-8 h-8 opacity-20" />
-                            <p className="text-sm italic">Conversation history will appear here...</p>
-                          </div>
-                        )}
-                        {logs.map((log) => (
-                          <div 
-                            key={log.id} 
-                            className={`flex flex-col ${
-                              log.sender === 'user' ? 'items-end' : 
-                              log.sender === 'ai' ? 'items-start' : 'items-center'
-                            }`}
-                          >
-                            <div className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm shadow-md ${
-                              log.sender === 'user' ? 'bg-blue-600 text-white rounded-br-none' : 
-                              log.sender === 'ai' ? 'bg-slate-700 text-slate-200 rounded-bl-none' : 
-                              'bg-slate-800/50 text-slate-500 text-xs italic border border-slate-700'
-                            }`}>
-                              <SmoothText text={log.message} isFinal={log.isFinal} />
-                            </div>
-                            {log.sender !== 'system' && (
-                              <div className="flex items-center gap-2 mt-1 px-1">
-                                 <span className="text-[10px] text-slate-600 font-mono">
-                                  {new Date(log.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second: '2-digit'})}
-                                </span>
-                                {log.sender === 'ai' && log.responseTime !== undefined && (
-                                  <span className="flex items-center text-[10px] text-emerald-500 bg-emerald-500/10 px-1 rounded">
-                                     <Clock className="w-3 h-3 mr-1" />
-                                     {(log.responseTime / 1000).toFixed(2)}s
-                                  </span>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        ))}
-                        <div ref={logsEndRef} />
-                      </div>
-
-                      <div className="p-4 bg-slate-900 border-t border-slate-700">
-                        <form onSubmit={handleSendText} className="flex gap-2">
-                          <input
+    <div className={`${theme} h-full w-full`}>
+      <div className="relative w-full h-full flex overflow-hidden bg-slate-50 dark:bg-black/90 transition-colors duration-500">
+         
+         {/* Background Gradients */}
+         <div className="absolute inset-0 z-0 bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-[#1a1a1a] dark:to-black opacity-100 dark:opacity-100 transition-colors duration-500" />
+         
+         {!user ? (
+            <LoginPage onLogin={setUser} theme={theme} />
+         ) : (
+             <div className="relative z-10 w-full h-full flex overflow-hidden">
+                {/* Create Modal */}
+                {isCreateModalOpen && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-md p-4 animate-in fade-in duration-200">
+                    <div className="bg-white/90 dark:bg-black/80 backdrop-blur-xl border border-white/20 dark:border-white/10 rounded-2xl w-full max-w-sm overflow-hidden p-6 shadow-2xl">
+                        <h3 className="font-semibold text-slate-800 dark:text-white text-lg mb-4 text-center">New Workspace</h3>
+                        <form onSubmit={handleCreateProject} className="space-y-4">
+                        <input
+                            ref={newProjectInputRef}
                             type="text"
-                            value={inputText}
-                            onChange={(e) => setInputText(e.target.value)}
-                            disabled={connectionState !== ConnectionState.CONNECTED}
-                            placeholder={connectionState === ConnectionState.CONNECTED ? "Type a message..." : "Connect to chat..."}
-                            className="flex-1 bg-slate-800 text-slate-200 placeholder-slate-500 border border-slate-700 rounded-full px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
-                          />
-                          <button
+                            value={newProjectName}
+                            onChange={(e) => setNewProjectName(e.target.value)}
+                            placeholder="Name your project"
+                            className="w-full bg-slate-200/50 dark:bg-white/10 border border-transparent dark:border-white/10 rounded-lg px-4 py-2 text-slate-900 dark:text-white placeholder-slate-500 dark:placeholder-white/40 focus:outline-none focus:bg-slate-200 dark:focus:bg-white/20 text-center transition-all"
+                        />
+                        <div className="flex gap-2 pt-2">
+                            <button
+                            type="button"
+                            onClick={() => setIsCreateModalOpen(false)}
+                            className="flex-1 px-4 py-2 rounded-lg text-slate-600 dark:text-white/60 hover:bg-slate-200 dark:hover:bg-white/5 transition-colors text-sm"
+                            >
+                            Cancel
+                            </button>
+                            <button
                             type="submit"
-                            disabled={!inputText.trim() || connectionState !== ConnectionState.CONNECTED}
-                            className="p-3 bg-blue-600 text-white rounded-full hover:bg-blue-500 disabled:opacity-50 disabled:bg-slate-800 disabled:cursor-not-allowed transition-all shadow-lg shadow-blue-900/20"
-                          >
-                            <Send className="w-5 h-5" />
-                          </button>
+                            disabled={!newProjectName.trim()}
+                            className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-medium text-sm shadow-lg disabled:opacity-50"
+                            >
+                            Create
+                            </button>
+                        </div>
                         </form>
-                      </div>
-                  </>
-              ) : (
-                  // TASKS VIEW
-                  activeProjectId ? (
-                      <TodoList 
-                          tasks={activeProject?.tasks || []} 
-                          onAddTask={handleAddTask}
-                          onToggleTask={handleToggleTask}
-                          onDeleteTask={handleDeleteTask}
-                      />
-                  ) : (
-                      <div className="h-full flex flex-col items-center justify-center text-slate-500 p-6 text-center">
-                          <FolderPlus className="w-12 h-12 mb-4 opacity-20" />
-                          <p>Create or select a project to manage tasks.</p>
-                      </div>
-                  )
-              )}
-            </div>
+                    </div>
+                    </div>
+                )}
 
-          </main>
+                {/* Sidebar */}
+                <div className="w-64 bg-white/60 dark:bg-[#0f0f0f]/60 backdrop-blur-xl flex flex-col shrink-0 pt-5 pb-3 px-3 border-r border-slate-200 dark:border-white/5 transition-colors duration-500">
+                    <div className="flex-1 overflow-y-auto space-y-1">
+                        <div className="px-3 text-[10px] font-semibold text-slate-400 dark:text-white/40 uppercase tracking-widest mb-2 mt-2">Workspaces</div>
+                        
+                        <button onClick={switchToQuickSession} className={`w-full flex items-center gap-3 px-3 py-1.5 rounded-lg text-sm transition-all ${!activeProjectId ? 'bg-blue-600 text-white shadow-md' : 'text-slate-600 dark:text-white/70 hover:bg-slate-200 dark:hover:bg-white/10'}`}>
+                            <Zap className="w-4 h-4" />
+                            Quick Session
+                        </button>
+                        
+                        {projects.map(p => (
+                            <div key={p.id} className="group relative">
+                                <button onClick={() => selectProject(p.id)} className={`w-full flex items-center gap-3 px-3 py-1.5 rounded-lg text-sm transition-all text-left ${activeProjectId === p.id ? 'bg-blue-600 text-white shadow-md' : 'text-slate-600 dark:text-white/70 hover:bg-slate-200 dark:hover:bg-white/10'}`}>
+                                    <Folder className="w-4 h-4" />
+                                    <span className="truncate">{p.name}</span>
+                                </button>
+                                <button onClick={(e) => deleteProject(e, p.id)} className="absolute right-2 top-1.5 p-0.5 text-slate-400 dark:text-white/40 hover:text-red-500 dark:hover:text-red-300 opacity-0 group-hover:opacity-100 transition-opacity">
+                                    <X className="w-3 h-3" />
+                                </button>
+                            </div>
+                        ))}
+                        
+                        <button onClick={openCreateModal} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-slate-500 dark:text-white/40 hover:text-slate-900 dark:hover:text-white transition-colors mt-2">
+                            <Plus className="w-4 h-4" />
+                            New Project
+                        </button>
+                    </div>
+
+                    {/* User Profile */}
+                    <div className="pt-4 mt-2 border-t border-slate-200 dark:border-white/5">
+                        <div className="flex items-center gap-3 px-2 mb-3">
+                            <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-400 to-indigo-500 flex items-center justify-center text-xs font-bold text-white shadow-md">
+                                {user.username[0].toUpperCase()}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                                <div className="text-sm font-medium text-slate-800 dark:text-white truncate">{user.username}</div>
+                                <div className="text-[10px] text-slate-500 dark:text-white/40">Online</div>
+                            </div>
+                            <button onClick={toggleTheme} className="p-1.5 rounded-md text-slate-500 dark:text-white/40 hover:bg-slate-200 dark:hover:bg-white/10 transition-colors">
+                                {theme === 'light' ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
+                            </button>
+                        </div>
+                        <div className="flex gap-1">
+                            <button onClick={handleExportData} className="flex-1 py-1.5 bg-slate-200/50 dark:bg-white/5 hover:bg-slate-300 dark:hover:bg-white/10 rounded-md text-[10px] text-slate-600 dark:text-white/60 font-medium transition-colors flex items-center justify-center gap-1">
+                                <Download className="w-3 h-3" /> Backup
+                            </button>
+                            <button onClick={handleLogout} className="flex-1 py-1.5 bg-slate-200/50 dark:bg-white/5 hover:bg-red-100 dark:hover:bg-red-500/20 hover:text-red-600 dark:hover:text-red-300 rounded-md text-[10px] text-slate-600 dark:text-white/60 font-medium transition-colors flex items-center justify-center gap-1">
+                                <LogOut className="w-3 h-3" /> Log Out
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Main Content Area */}
+                <div className="flex-1 flex flex-col bg-white/40 dark:bg-black/20 backdrop-blur-sm relative transition-colors duration-500">
+                    
+                    {/* Header */}
+                    <div className="h-14 border-b border-slate-200 dark:border-white/5 flex items-center justify-between px-6 bg-white/30 dark:bg-white/5 backdrop-blur-md">
+                        <div className="flex items-center gap-3">
+                            <h1 className="text-base font-semibold text-slate-800 dark:text-white tracking-wide">
+                                {activeProjectId ? activeProject?.name : "Dashboard"}
+                            </h1>
+                            {connectionState !== ConnectionState.IDLE && (
+                                <div className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${connectionState === ConnectionState.CONNECTED ? 'border-green-500/30 text-green-600 dark:text-green-400 bg-green-500/10' : 'border-yellow-500/30 text-yellow-600 dark:text-yellow-400 bg-yellow-500/10'}`}>
+                                    {connectionState === ConnectionState.CONNECTED ? 'LIVE' : 'CONNECTING...'}
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Tab Switcher */}
+                        <div className="bg-slate-200 dark:bg-black/40 p-1 rounded-lg flex gap-1">
+                            <button onClick={() => setViewMode('chat')} className={`px-3 py-1 rounded-md text-xs font-medium transition-all ${viewMode === 'chat' ? 'bg-white dark:bg-white/20 text-slate-900 dark:text-white shadow-sm' : 'text-slate-500 dark:text-white/40 hover:text-slate-900 dark:hover:text-white'}`}>Chat</button>
+                            <button onClick={() => setViewMode('tasks')} className={`px-3 py-1 rounded-md text-xs font-medium transition-all ${viewMode === 'tasks' ? 'bg-white dark:bg-white/20 text-slate-900 dark:text-white shadow-sm' : 'text-slate-500 dark:text-white/40 hover:text-slate-900 dark:hover:text-white'}`}>Tasks</button>
+                        </div>
+                    </div>
+
+                    <div className="flex-1 flex overflow-hidden">
+                        {/* Left Panel: Monitor */}
+                        <div className="w-[45%] flex flex-col p-6 gap-6 border-r border-slate-200 dark:border-white/5 overflow-y-auto">
+                            
+                            <div className="bg-slate-200 dark:bg-black/40 rounded-2xl overflow-hidden aspect-video relative shadow-xl border border-white/20 dark:border-white/5 ring-1 ring-black/5 dark:ring-white/5 group">
+                                {connectionState === ConnectionState.IDLE ? (
+                                    <div className="absolute inset-0 flex flex-col items-center justify-center text-center p-8 bg-gradient-to-br from-white/40 to-transparent dark:from-white/5 dark:to-transparent">
+                                        <div className="w-16 h-16 rounded-full bg-white/50 dark:bg-white/5 flex items-center justify-center mb-4 backdrop-blur-sm border border-white/20 dark:border-white/10 shadow-sm">
+                                            <Monitor className="w-8 h-8 text-slate-400 dark:text-white/60" />
+                                        </div>
+                                        <h3 className="text-slate-700 dark:text-white font-medium mb-1">AI Monitor</h3>
+                                        <p className="text-xs text-slate-500 dark:text-white/40 mb-6">Connect to enable visual context</p>
+                                        <button onClick={handleStart} className="px-6 py-2 bg-slate-900 dark:bg-white text-white dark:text-black font-semibold rounded-full hover:scale-105 transition-transform shadow-lg shadow-black/10 dark:shadow-white/10 flex items-center gap-2">
+                                            <Play className="w-4 h-4 fill-current" /> Start Session
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <ScreenShare 
+                                        ref={screenShareRef}
+                                        isActive={connectionState === ConnectionState.CONNECTED}
+                                        isPaused={isVideoPaused}
+                                        onFrame={handleVideoFrame}
+                                        onStop={() => { isScreenSharingRef.current = false; handleStop(); }}
+                                        onStart={() => { isScreenSharingRef.current = true; if(connectionState === ConnectionState.CONNECTED) serviceRef.current?.notifyScreenStart(); }}
+                                    />
+                                )}
+                            </div>
+
+                            {/* Controls */}
+                            <div className="bg-white/40 dark:bg-white/5 rounded-2xl p-4 border border-white/20 dark:border-white/5 backdrop-blur-md shadow-sm">
+                                <div className="flex items-center justify-between mb-4">
+                                    <div className="flex items-center gap-3">
+                                        <button onClick={handleMuteToggle} disabled={connectionState !== ConnectionState.CONNECTED} className={`p-3 rounded-full transition-all ${isMuted ? 'bg-red-500 text-white' : 'bg-slate-200 dark:bg-white/10 text-slate-600 dark:text-white hover:bg-slate-300 dark:hover:bg-white/20'}`}>
+                                            {isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+                                        </button>
+                                        <button onClick={handleVideoPauseToggle} disabled={connectionState !== ConnectionState.CONNECTED} className={`p-3 rounded-full transition-all ${isVideoPaused ? 'bg-yellow-500 text-black' : 'bg-slate-200 dark:bg-white/10 text-slate-600 dark:text-white hover:bg-slate-300 dark:hover:bg-white/20'}`}>
+                                            {isVideoPaused ? <VideoOff className="w-5 h-5" /> : <Video className="w-5 h-5" />}
+                                        </button>
+                                    </div>
+                                    {connectionState === ConnectionState.CONNECTED && (
+                                        <button onClick={handleStop} className="px-4 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-500 dark:text-red-300 rounded-lg text-xs font-medium border border-red-500/20 transition-colors">
+                                            End Session
+                                        </button>
+                                    )}
+                                </div>
+                                <div className="space-y-3">
+                                    <UsageBar label="Tokens / Min" current={stats.tokensPerMinute} max={FREE_TIER_LIMITS.TPM} unit="" />
+                                    <UsageBar label="Daily Requests" current={dailyRequests} max={FREE_TIER_LIMITS.RPD} unit="" />
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Right Panel: Chat or Tasks */}
+                        <div className="flex-1 bg-gradient-to-b from-white/20 to-transparent dark:from-white/5 dark:to-transparent flex flex-col relative">
+                            {viewMode === 'chat' ? (
+                                <>
+                                    <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                                        {logs.length === 0 && (
+                                            <div className="h-full flex flex-col items-center justify-center opacity-40">
+                                                <MessageSquare className="w-12 h-12 mb-3 text-slate-400 dark:text-white" />
+                                                <p className="text-sm text-slate-500 dark:text-white">Conversation History</p>
+                                            </div>
+                                        )}
+                                        {logs.map((log) => (
+                                            <div key={log.id} className={`flex flex-col ${log.sender === 'user' ? 'items-end' : log.sender === 'ai' ? 'items-start' : 'items-center'}`}>
+                                                {log.sender === 'system' ? (
+                                                    <span className="text-[10px] text-slate-400 dark:text-white/30 uppercase tracking-widest my-2 px-2 py-1 bg-slate-200/50 dark:bg-white/5 rounded-full">{log.message}</span>
+                                                ) : (
+                                                    <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm shadow-sm backdrop-blur-sm ${
+                                                        log.sender === 'user' 
+                                                        ? 'bg-blue-600 text-white rounded-br-sm shadow-blue-500/20' 
+                                                        : 'bg-white dark:bg-[#3A3A3C] text-slate-800 dark:text-white rounded-bl-sm border border-slate-100 dark:border-transparent'
+                                                    }`}>
+                                                        <SmoothText text={log.message} isFinal={log.isFinal} />
+                                                    </div>
+                                                )}
+                                                {log.sender !== 'system' && (
+                                                    <span className="text-[10px] text-slate-400 dark:text-white/20 mt-1 px-1">{new Date(log.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
+                                                )}
+                                            </div>
+                                        ))}
+                                        <div ref={logsEndRef} />
+                                    </div>
+                                    
+                                    <div className="p-4 bg-white/60 dark:bg-white/5 backdrop-blur-md border-t border-slate-200 dark:border-white/5">
+                                        <form onSubmit={handleSendText} className="relative">
+                                            <input
+                                                type="text"
+                                                value={inputText}
+                                                onChange={(e) => setInputText(e.target.value)}
+                                                placeholder="Type a message..."
+                                                disabled={connectionState !== ConnectionState.CONNECTED}
+                                                className="w-full bg-slate-100 dark:bg-black/20 border border-slate-200 dark:border-white/10 rounded-full pl-5 pr-12 py-3 text-sm text-slate-900 dark:text-white focus:outline-none focus:bg-white dark:focus:bg-black/40 focus:border-blue-400 dark:focus:border-white/20 transition-all placeholder-slate-400 dark:placeholder-white/30"
+                                            />
+                                            <button type="submit" disabled={!inputText.trim()} className="absolute right-2 top-1.5 p-1.5 bg-blue-600 rounded-full text-white hover:bg-blue-500 disabled:opacity-0 transition-all shadow-md">
+                                                <ArrowRight className="w-4 h-4" />
+                                            </button>
+                                        </form>
+                                    </div>
+                                </>
+                            ) : (
+                                <div className="flex-1 overflow-hidden">
+                                    {activeProjectId ? (
+                                        <TodoList 
+                                            tasks={activeProject?.tasks || []} 
+                                            onAddTask={handleAddTask}
+                                            onToggleTask={handleToggleTask}
+                                            onDeleteTask={handleDeleteTask}
+                                            onEditTask={handleEditTask}
+                                        />
+                                    ) : (
+                                        <div className="h-full flex flex-col items-center justify-center opacity-40">
+                                            <ListTodo className="w-12 h-12 mb-3 text-slate-400 dark:text-white" />
+                                            <p className="text-sm text-slate-500 dark:text-white">Select a Workspace</p>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            </div>
+         )}
       </div>
     </div>
   );

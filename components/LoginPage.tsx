@@ -1,14 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { ShieldCheck, User, ArrowRight, Loader2, RefreshCw, XCircle, Lock, KeyRound, LogIn, UserPlus, Eye, EyeOff, Upload } from 'lucide-react';
+import { User, ArrowRight, Loader2, RefreshCw, XCircle, Lock, Eye, EyeOff, Upload, DownloadCloud } from 'lucide-react';
 import { LocalAuthService } from '../services/localAuth';
 import { db } from '../services/database';
 import { User as UserType } from '../types';
 
 interface LoginPageProps {
   onLogin: (user: UserType) => void;
+  theme?: 'light' | 'dark';
 }
 
-const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
+const LoginPage: React.FC<LoginPageProps> = ({ onLogin, theme = 'dark' }) => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -50,8 +51,7 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
       const user = username.trim();
       let result;
       
-      // Artificial delay for UX smoothness
-      await new Promise(resolve => setTimeout(resolve, 600));
+      await new Promise(resolve => setTimeout(resolve, 800));
 
       if (isNewUser) {
         result = await LocalAuthService.register(user, password);
@@ -67,7 +67,7 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
         });
       } else {
           setError(result.error || "Authentication failed");
-          setPassword(''); // Clear password on error
+          setPassword(''); 
       }
     } catch (err: any) {
         setError(err.message || "An unexpected error occurred");
@@ -87,7 +87,6 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
             const result = await db.importData(event.target?.result as string);
             
             if (result.success) {
-                 // Try to detect the user from the backup if possible
                  const lastUser = LocalAuthService.getLastUser();
                  if (lastUser) {
                      setUsername(lastUser);
@@ -100,10 +99,8 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
             }
         } catch (err) {
             setError("Failed to parse backup file.");
-            console.error(err);
         } finally {
             setLoading(false);
-            // Clear input
             e.target.value = '';
         }
     };
@@ -120,150 +117,101 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4 relative overflow-hidden">
-      {/* Background Decor */}
-      <div className="absolute top-0 left-0 w-full h-full overflow-hidden pointer-events-none">
-          <div className="absolute -top-1/2 -left-1/2 w-[200%] h-[200%] bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-blue-900/20 via-slate-950 to-slate-950 animate-pulse" />
+    <div className="relative z-10 w-full h-full flex flex-col items-center pt-[15vh]">
+      
+      {/* Avatar Circle */}
+      <div className="mb-8 relative group">
+        <div className="w-24 h-24 rounded-full bg-white/40 dark:bg-gray-200/20 backdrop-blur-md shadow-2xl flex items-center justify-center border border-white/20 dark:border-white/10 transition-transform duration-500 hover:scale-105">
+           {username ? (
+              <span className="text-3xl font-semibold text-slate-700 dark:text-white/90">{username[0].toUpperCase()}</span>
+           ) : (
+              <User className="w-10 h-10 text-slate-500 dark:text-white/50" />
+           )}
+        </div>
+        {loading && (
+            <div className="absolute inset-0 rounded-full border-4 border-t-blue-500 dark:border-t-white/80 border-r-transparent border-b-transparent border-l-transparent animate-spin" />
+        )}
       </div>
 
-      <div className="w-full max-w-md z-10">
-        <div className="bg-slate-900/80 backdrop-blur-xl border border-slate-700/50 rounded-2xl shadow-2xl overflow-hidden transition-all duration-500">
-          
-          <div className="p-8 text-center border-b border-slate-700/50 bg-slate-900/50">
-            <div className="w-16 h-16 bg-blue-500/10 rounded-full flex items-center justify-center mx-auto mb-6 border border-blue-500/20 shadow-[0_0_15px_rgba(59,130,246,0.2)]">
-              <ShieldCheck className="w-8 h-8 text-blue-400" />
-            </div>
-            <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-400 to-emerald-400 bg-clip-text text-transparent">
-              ScreenSentinel
-            </h1>
-            <p className="text-slate-400 text-sm mt-3 font-light tracking-wide">
-              SECURE AI WORKSPACE
-            </p>
+      <div className="w-full max-w-xs space-y-4">
+          <div className="text-center mb-6">
+             <h2 className="text-2xl font-semibold text-slate-800 dark:text-white drop-shadow-sm">
+                 {username || "ScreenSentinel"}
+             </h2>
+             {username && isNewUser && (
+                 <p className="text-xs text-slate-500 dark:text-white/60 mt-1">Create Account</p>
+             )}
           </div>
 
-          <form onSubmit={handleAuth} className="p-8 space-y-5">
-            
-            <div className="space-y-4">
-                {/* Username Field */}
-                <div>
-                  <label htmlFor="username" className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
-                    Identity
-                  </label>
-                  <div className="relative group">
-                    <User className="absolute left-3 top-3.5 w-5 h-5 text-slate-500 group-focus-within:text-blue-400 transition-colors" />
-                    <input
-                      id="username"
-                      type="text"
-                      value={username}
-                      onChange={(e) => setUsername(e.target.value)}
-                      placeholder="Enter username"
-                      className="w-full bg-slate-950 border border-slate-700 rounded-xl py-3 pl-10 pr-4 text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 transition-all"
-                      autoComplete="username"
-                      autoFocus
-                    />
-                  </div>
-                </div>
+          <form onSubmit={handleAuth} className="space-y-3 relative">
+             <div className="space-y-3">
+                 <input
+                    type="text"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    placeholder="User Name"
+                    className="w-full bg-white/60 dark:bg-white/10 backdrop-blur-md border border-white/40 dark:border-white/20 rounded-xl px-4 py-2.5 text-center text-slate-800 dark:text-white placeholder-slate-500 dark:placeholder-white/40 focus:outline-none focus:bg-white/80 dark:focus:bg-white/20 focus:border-blue-400 dark:focus:border-white/40 transition-all shadow-lg"
+                    autoFocus
+                 />
+                 
+                 <div className="relative">
+                     <input
+                        type={showPassword ? "text" : "password"}
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        placeholder="Enter Password"
+                        className="w-full bg-white/60 dark:bg-white/10 backdrop-blur-md border border-white/40 dark:border-white/20 rounded-xl px-4 py-2.5 text-center text-slate-800 dark:text-white placeholder-slate-500 dark:placeholder-white/40 focus:outline-none focus:bg-white/80 dark:focus:bg-white/20 focus:border-blue-400 dark:focus:border-white/40 transition-all shadow-lg"
+                     />
+                     {password && (
+                         <button 
+                           type="button" 
+                           onClick={() => setShowPassword(!showPassword)}
+                           className="absolute right-3 top-2.5 text-slate-500 dark:text-white/50 hover:text-slate-800 dark:hover:text-white"
+                         >
+                            {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                         </button>
+                     )}
+                     
+                     <button
+                        type="submit"
+                        disabled={!username || !password || loading}
+                        className="absolute right-2 top-2 p-1 bg-blue-500 dark:bg-white/20 hover:bg-blue-600 dark:hover:bg-white/30 rounded-full text-white transition-opacity disabled:opacity-0 opacity-100"
+                     >
+                        <ArrowRight className="w-4 h-4" />
+                     </button>
+                 </div>
+             </div>
 
-                {/* Password Field */}
-                <div className="animate-in fade-in slide-in-from-top-2 duration-300">
-                  <label htmlFor="password" className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
-                    Password
-                  </label>
-                  <div className="relative group">
-                    <KeyRound className="absolute left-3 top-3.5 w-5 h-5 text-slate-500 group-focus-within:text-blue-400 transition-colors" />
-                    <input
-                      id="password"
-                      type={showPassword ? "text" : "password"}
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      placeholder={isNewUser ? "Create a password" : "Enter your password"}
-                      className="w-full bg-slate-950 border border-slate-700 rounded-xl py-3 pl-10 pr-12 text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 transition-all"
-                      autoComplete={isNewUser ? "new-password" : "current-password"}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowPassword(!showPassword)}
-                      className="absolute right-3 top-3 text-slate-500 hover:text-blue-400 focus:outline-none p-1 rounded-md transition-colors"
-                      title={showPassword ? "Hide password" : "Show password"}
-                    >
-                      {showPassword ? (
-                        <EyeOff className="w-5 h-5" />
-                      ) : (
-                        <Eye className="w-5 h-5" />
-                      )}
-                    </button>
-                  </div>
-                  {username && (
-                    <p className="text-xs text-slate-600 mt-2 flex items-center gap-1 transition-all">
-                        {isNewUser ? (
-                            <span className="text-emerald-500/80 flex items-center gap-1">
-                                <UserPlus className="w-3 h-3" /> Creating new account
-                            </span>
-                        ) : (
-                            <span className="text-blue-500/80 flex items-center gap-1">
-                                <LogIn className="w-3 h-3" /> Logging in
-                            </span>
-                        )}
-                    </p>
-                  )}
-                </div>
-            </div>
-
-            <div className="mt-2">
-                <button
-                type="submit"
-                disabled={loading || !username.trim() || !password.trim()}
-                className={`w-full py-4 rounded-xl font-bold text-white transition-all transform duration-200 flex items-center justify-center gap-3 shadow-lg ${
-                    loading || !username.trim() || !password.trim()
-                    ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
-                    : isNewUser 
-                        ? 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 hover:scale-[1.02] shadow-emerald-900/20'
-                        : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 hover:scale-[1.02] shadow-blue-900/20'
-                }`}
-                >
-                {loading ? (
-                    <Loader2 className="w-5 h-5 animate-spin" />
-                ) : (
-                    isNewUser ? <UserPlus className="w-5 h-5" /> : <Lock className="w-5 h-5" />
-                )}
-                {loading ? 'Processing...' : (isNewUser ? 'Create Account' : 'Login Securely')}
-                {!loading && username.trim() && <ArrowRight className="w-4 h-4 opacity-50" />}
-                </button>
-            </div>
-
-            {error && (
-              <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-lg text-red-400 text-xs flex items-center gap-2 animate-in fade-in slide-in-from-top-2">
-                <XCircle className="w-4 h-4 shrink-0" />
-                {error}
-              </div>
-            )}
-            
-            <div className="text-center">
-                 <button 
-                  type="button" 
-                  onClick={clearState}
-                  className="text-xs text-slate-500 hover:text-blue-400 transition-colors flex items-center justify-center gap-1 w-full"
-                >
-                  <RefreshCw className="w-3 h-3" />
-                  Reset / Switch Account
-                </button>
-            </div>
-
+             {error && (
+                 <div className="text-center text-red-600 dark:text-red-300 text-xs font-medium bg-red-100 dark:bg-red-500/20 py-1.5 rounded-lg border border-red-200 dark:border-red-500/20 mt-2 backdrop-blur-sm animate-in fade-in slide-in-from-top-1">
+                     {error}
+                 </div>
+             )}
           </form>
-          
-          <div className="px-8 pb-6 text-center">
-             <label className="flex items-center justify-center gap-2 text-[10px] text-slate-500 uppercase tracking-widest cursor-pointer hover:text-blue-400 transition-colors">
-                <Upload className="w-3 h-3" />
-                Restore Backup
-                <input 
-                  type="file" 
-                  accept=".json" 
-                  className="hidden" 
-                  onChange={handleRestoreBackup}
-                />
-             </label>
+
+          <div className="flex justify-center gap-6 pt-8">
+               <button 
+                 onClick={clearState}
+                 className="flex flex-col items-center gap-2 group"
+               >
+                   <div className="w-10 h-10 rounded-full bg-white/40 dark:bg-white/10 flex items-center justify-center border border-white/20 dark:border-white/5 group-hover:bg-white/60 dark:group-hover:bg-white/20 transition-all">
+                       <RefreshCw className="w-4 h-4 text-slate-600 dark:text-white/80" />
+                   </div>
+                   <span className="text-[10px] font-medium text-slate-500 dark:text-white/60">Switch User</span>
+               </button>
+
+               <label className="flex flex-col items-center gap-2 group cursor-pointer">
+                   <div className="w-10 h-10 rounded-full bg-white/40 dark:bg-white/10 flex items-center justify-center border border-white/20 dark:border-white/5 group-hover:bg-white/60 dark:group-hover:bg-white/20 transition-all">
+                       <DownloadCloud className="w-4 h-4 text-slate-600 dark:text-white/80" />
+                   </div>
+                   <span className="text-[10px] font-medium text-slate-500 dark:text-white/60">Restore</span>
+                   <input type="file" accept=".json" className="hidden" onChange={handleRestoreBackup} />
+               </label>
           </div>
-        </div>
+      </div>
+      
+      <div className="fixed bottom-6 text-slate-400 dark:text-white/30 text-[10px] font-medium tracking-widest uppercase">
+          Mac Style Secure Workspace
       </div>
     </div>
   );

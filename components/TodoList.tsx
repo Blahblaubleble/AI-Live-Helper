@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Plus, Check, Trash2, Calendar, AlertCircle, ListTodo, Clock, X } from 'lucide-react';
+import { Plus, Trash2, Calendar, Clock, X, Pencil } from 'lucide-react';
 import { Task } from '../types';
 
 interface TodoListProps {
@@ -7,14 +7,18 @@ interface TodoListProps {
   onAddTask: (task: Task) => void;
   onToggleTask: (taskId: string) => void;
   onDeleteTask: (taskId: string) => void;
+  onEditTask: (taskId: string, newTitle: string) => void;
 }
 
-const TodoList: React.FC<TodoListProps> = ({ tasks, onAddTask, onToggleTask, onDeleteTask }) => {
+const TodoList: React.FC<TodoListProps> = ({ tasks, onAddTask, onToggleTask, onDeleteTask, onEditTask }) => {
   const [newTaskTitle, setNewTaskTitle] = useState('');
   const [newPriority, setNewPriority] = useState<'Low' | 'Medium' | 'High'>('Medium');
   const [newDueDate, setNewDueDate] = useState<string>(''); // ISO String
-  const [hideCompleted, setHideCompleted] = useState(false);
   const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
+  
+  // Edit State
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState('');
   
   const datePickerRef = useRef<HTMLDivElement>(null);
 
@@ -47,15 +51,11 @@ const TodoList: React.FC<TodoListProps> = ({ tasks, onAddTask, onToggleTask, onD
       // 2. Due Date ascending (Overdue first)
       const dateA = new Date(a.dueDate).getTime();
       const dateB = new Date(b.dueDate).getTime();
-      // Handle invalid dates by pushing them to the end
       if (isNaN(dateA)) return 1;
       if (isNaN(dateB)) return -1;
       return dateA - dateB;
     });
   }, [tasks]);
-
-  const filteredTasks = sortedTasks.filter(t => !hideCompleted || !t.completed);
-  const pendingCount = tasks.filter(t => !t.completed).length;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -63,7 +63,6 @@ const TodoList: React.FC<TodoListProps> = ({ tasks, onAddTask, onToggleTask, onD
 
     let dueIsoString = newDueDate;
     if (!dueIsoString) {
-        // Default to end of today if not selected
         const today = new Date();
         today.setHours(23, 59, 59, 999);
         dueIsoString = today.toISOString();
@@ -85,32 +84,46 @@ const TodoList: React.FC<TodoListProps> = ({ tasks, onAddTask, onToggleTask, onD
     setIsDatePickerOpen(false);
   };
 
+  const startEditing = (task: Task) => {
+    setEditingTaskId(task.id);
+    setEditTitle(task.title);
+  };
+
+  const saveEdit = () => {
+    if (editingTaskId && editTitle.trim()) {
+      onEditTask(editingTaskId, editTitle.trim());
+    }
+    cancelEdit();
+  };
+
+  const cancelEdit = () => {
+    setEditingTaskId(null);
+    setEditTitle('');
+  };
+
   const getPriorityColor = (priority: string) => {
     switch (priority) {
-      case 'High': return 'bg-red-500/20 text-red-400 border-red-500/30';
-      case 'Medium': return 'bg-amber-500/20 text-amber-400 border-amber-500/30';
-      case 'Low': return 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30';
-      default: return 'bg-slate-700 text-slate-400';
+      case 'High': return 'text-red-500 dark:text-red-400';
+      case 'Medium': return 'text-yellow-600 dark:text-yellow-400';
+      case 'Low': return 'text-blue-600 dark:text-blue-400';
+      default: return 'text-slate-400 dark:text-gray-400';
     }
   };
 
+  const getPriorityDots = (priority: string) => {
+    switch (priority) {
+        case 'High': return '!!!';
+        case 'Medium': return '!!';
+        default: return '!';
+    }
+  }
+
   const getTaskTiming = (dateStr: string) => {
     const due = new Date(dateStr);
-    
-    // Safety check for invalid dates
-    if (isNaN(due.getTime())) {
-        return { friendlyDate: 'Invalid Date', countdown: '--', isOverdue: false };
-    }
+    if (isNaN(due.getTime())) return { friendlyDate: '', isOverdue: false };
 
-    const now = new Date();
-    
-    const diffMs = due.getTime() - now.getTime();
+    const diffMs = due.getTime() - new Date().getTime();
     const isOverdue = diffMs < 0;
-    const absDiff = Math.abs(diffMs);
-    
-    const days = Math.floor(absDiff / (1000 * 60 * 60 * 24));
-    const hours = Math.floor((absDiff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-    const minutes = Math.floor((absDiff % (1000 * 60 * 60)) / (1000 * 60));
     
     // Calendar Date Label
     const today = new Date();
@@ -121,7 +134,7 @@ const TodoList: React.FC<TodoListProps> = ({ tasks, onAddTask, onToggleTask, onD
     try {
         friendlyDate = due.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
     } catch (e) {
-        friendlyDate = 'Invalid Date';
+        friendlyDate = '';
     }
 
     if (due.toDateString() === today.toDateString()) friendlyDate = 'Today';
@@ -129,103 +142,125 @@ const TodoList: React.FC<TodoListProps> = ({ tasks, onAddTask, onToggleTask, onD
     else if (due.toDateString() === yesterday.toDateString()) friendlyDate = 'Yesterday';
 
     const timeStr = due.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-    const fullDate = `${friendlyDate}, ${timeStr}`;
-
-    // Countdown string
-    let countdown = '';
-    if (days > 0) countdown = `${days}d ${hours}h`;
-    else if (hours > 0) countdown = `${hours}h ${minutes}m`;
-    else countdown = `${minutes}m`;
-    
-    if (diffMs === 0) countdown = "Now";
-    else countdown = isOverdue ? `${countdown} late` : `${countdown} left`;
-
-    return { friendlyDate: fullDate, countdown, isOverdue };
+    return { friendlyDate: `${friendlyDate}, ${timeStr}`, isOverdue };
   };
 
-  const getDueDateLabel = () => {
-      if (!newDueDate) return "Today";
-      const timing = getTaskTiming(newDueDate);
-      return timing.friendlyDate;
-  };
-
-  // Convert UTC ISO string to "YYYY-MM-DDThh:mm" (Local Time) for input value
   const getInputValue = (isoString: string) => {
     if (!isoString) return '';
     const date = new Date(isoString);
     if (isNaN(date.getTime())) return '';
-    
-    // We want the input to show the LOCAL time corresponding to this UTC timestamp.
-    // datetime-local expects "YYYY-MM-DDThh:mm" representing local time.
-    // date.toISOString() returns UTC.
-    // To get a string that looks like local time but formatted as ISO, we can shift the time by the timezone offset.
     const offset = date.getTimezoneOffset() * 60000;
     const localDate = new Date(date.getTime() - offset);
     return localDate.toISOString().slice(0, 16);
   };
 
   return (
-    <div className="flex flex-col h-full bg-slate-900">
-      {/* Header / Quick Add */}
-      <div className="p-4 bg-slate-800/50 border-b border-slate-700 space-y-4 z-20">
-        <div className="flex items-center justify-between">
-            <h3 className="font-semibold text-slate-200 flex items-center gap-2">
-                <ListTodo className="w-4 h-4 text-blue-400" />
-                Tasks
-            </h3>
-            <div className="flex items-center gap-2">
-                <span className="text-xs text-slate-500">Hide Done</span>
-                <button 
-                  onClick={() => setHideCompleted(!hideCompleted)}
-                  className={`w-8 h-4 rounded-full relative transition-colors ${hideCompleted ? 'bg-blue-600' : 'bg-slate-600'}`}
-                >
-                    <div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-all ${hideCompleted ? 'left-4.5' : 'left-0.5'}`} style={{ left: hideCompleted ? '1.125rem' : '0.125rem'}} />
-                </button>
-            </div>
-        </div>
+    <div className="flex flex-col h-full">
+      {/* Reminders Header */}
+      <div className="p-6 pb-2">
+          <h1 className="text-3xl font-bold text-blue-600 dark:text-blue-500 tracking-tight">Reminders</h1>
+          <div className="text-slate-500 dark:text-white/40 text-sm font-medium mt-1">{tasks.filter(t => !t.completed).length} Pending</div>
+      </div>
 
-        {/* Improved Add Task Form */}
-        <form onSubmit={handleSubmit} className="bg-slate-900 border border-slate-700 rounded-xl p-3 shadow-sm focus-within:ring-2 focus-within:ring-blue-500/20 transition-all relative">
-          <input
-            type="text"
-            value={newTaskTitle}
-            onChange={(e) => setNewTaskTitle(e.target.value)}
-            placeholder="What needs to be done?"
-            className="w-full bg-transparent text-sm text-slate-200 focus:outline-none placeholder-slate-600 mb-3"
-          />
-          
-          <div className="flex items-center justify-between gap-2 relative">
-             {/* Date Picker Trigger */}
+      {/* Task List - Apple Style */}
+      <div className="flex-1 overflow-y-auto px-6 py-2 space-y-1">
+        {sortedTasks.map(task => {
+            const timing = getTaskTiming(task.dueDate);
+            const isEditing = editingTaskId === task.id;
+            
+            return (
+                <div 
+                  key={task.id}
+                  className="group flex items-start py-3 border-b border-slate-200 dark:border-white/5 last:border-0 hover:bg-slate-100 dark:hover:bg-white/5 rounded-lg px-2 transition-colors"
+                >
+                   {/* Apple Style Check Circle */}
+                   <button
+                     onClick={() => onToggleTask(task.id)}
+                     className={`mt-0.5 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all duration-300 ${
+                         task.completed 
+                         ? 'bg-blue-500 border-blue-500' 
+                         : 'border-slate-300 dark:border-white/30 hover:border-blue-500 hover:bg-blue-500/10'
+                     }`}
+                   >
+                     {task.completed && <div className="w-2.5 h-2.5 bg-white rounded-full" />}
+                   </button>
+                   
+                   <div className="ml-3 flex-1 min-w-0">
+                      {isEditing ? (
+                        <input 
+                            type="text" 
+                            value={editTitle}
+                            onChange={(e) => setEditTitle(e.target.value)}
+                            onBlur={saveEdit}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter') saveEdit();
+                                if (e.key === 'Escape') cancelEdit();
+                            }}
+                            autoFocus
+                            className="w-full bg-transparent border-none p-0 text-slate-800 dark:text-white text-base focus:ring-0"
+                        />
+                      ) : (
+                        <div className="flex flex-col">
+                            <div className="flex items-center gap-2">
+                                <span className={`font-medium text-xs tracking-wider ${getPriorityColor(task.priority)}`}>
+                                    {getPriorityDots(task.priority)}
+                                </span>
+                                <span 
+                                    onClick={() => !task.completed && startEditing(task)}
+                                    className={`text-base cursor-text ${task.completed ? 'text-slate-400 dark:text-white/30 line-through' : 'text-slate-800 dark:text-white/90'}`}
+                                >
+                                    {task.title}
+                                </span>
+                            </div>
+                            
+                            <div className={`flex items-center gap-2 mt-0.5 text-xs ${timing.isOverdue && !task.completed ? 'text-red-500 dark:text-red-400' : 'text-slate-400 dark:text-white/40'}`}>
+                                <span>{timing.friendlyDate}</span>
+                            </div>
+                        </div>
+                      )}
+                   </div>
+
+                   <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                       {!task.completed && (
+                         <button onClick={() => startEditing(task)} className="p-1.5 text-slate-400 dark:text-white/40 hover:text-blue-500 dark:hover:text-blue-400">
+                            <Pencil className="w-4 h-4" />
+                         </button>
+                       )}
+                       <button onClick={() => onDeleteTask(task.id)} className="p-1.5 text-slate-400 dark:text-white/40 hover:text-red-500 dark:hover:text-red-400">
+                           <Trash2 className="w-4 h-4" />
+                       </button>
+                   </div>
+                </div>
+            );
+        })}
+        
+        {/* Empty State */}
+        {tasks.length === 0 && (
+             <div className="py-10 text-center text-slate-400 dark:text-white/20 text-sm font-medium">No Reminders</div>
+        )}
+        
+        {/* Quick Add at Bottom of List */}
+        <form onSubmit={handleSubmit} className="mt-4 flex items-center gap-3 px-2 py-2 opacity-60 hover:opacity-100 transition-opacity border-t border-transparent hover:border-slate-200 dark:hover:border-white/5">
+             <div className="w-5 h-5 rounded-full border-2 border-slate-300 dark:border-white/20" />
+             <input
+                type="text"
+                value={newTaskTitle}
+                onChange={(e) => setNewTaskTitle(e.target.value)}
+                placeholder="New Reminder"
+                className="bg-transparent border-none p-0 text-slate-800 dark:text-white placeholder-slate-400 dark:placeholder-white/30 focus:ring-0 flex-1"
+             />
+             
              <div className="relative" ref={datePickerRef}>
                 <button
                     type="button"
                     onClick={() => setIsDatePickerOpen(!isDatePickerOpen)}
-                    className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-medium transition-all ${
-                        newDueDate 
-                        ? 'bg-blue-500/10 text-blue-300 border-blue-500/30 hover:bg-blue-500/20' 
-                        : 'bg-slate-800 text-slate-400 border-slate-700 hover:bg-slate-700 hover:text-slate-200'
-                    }`}
+                    className={`text-xs px-2 py-1 rounded hover:bg-slate-200 dark:hover:bg-white/10 ${newDueDate ? 'text-blue-600 dark:text-blue-400' : 'text-slate-400 dark:text-white/30'}`}
                 >
-                    <Calendar className="w-3.5 h-3.5" />
-                    {getDueDateLabel()}
-                    {newDueDate && (
-                        <div 
-                            onClick={(e) => { e.stopPropagation(); setNewDueDate(''); }}
-                            className="ml-1 p-0.5 hover:bg-blue-500/30 rounded-full"
-                        >
-                            <X className="w-3 h-3" />
-                        </div>
-                    )}
+                    {newDueDate ? new Date(newDueDate).toLocaleDateString(undefined, {month:'short', day:'numeric'}) : 'Date'}
                 </button>
-
-                {/* Custom Popover (Redesigned) */}
-                {isDatePickerOpen && (
-                    <div className="absolute top-full left-0 mt-2 p-4 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl z-50 animate-in fade-in zoom-in-95 duration-100 origin-top-left min-w-[300px]">
-                        <label className="block text-xs font-semibold text-slate-400 mb-3 flex items-center gap-2">
-                             <Clock className="w-4 h-4 text-blue-400" />
-                             Pick a Date & Time
-                        </label>
-                        <input 
+                 {isDatePickerOpen && (
+                    <div className="absolute bottom-full right-0 mb-2 p-3 bg-white dark:bg-[#2a2a2a]/90 backdrop-blur-xl border border-slate-200 dark:border-white/10 rounded-xl shadow-2xl z-50 w-64">
+                         <input 
                             type="datetime-local"
                             value={getInputValue(newDueDate)}
                             max="9999-12-31T23:59"
@@ -239,127 +274,29 @@ const TodoList: React.FC<TodoListProps> = ({ tasks, onAddTask, onToggleTask, onD
                                     setNewDueDate('');
                                 }
                             }}
-                            className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 transition-all [color-scheme:dark]"
+                            className="w-full bg-slate-100 dark:bg-black/40 border border-slate-200 dark:border-white/10 rounded px-2 py-1 text-xs text-slate-900 dark:text-white [color-scheme:light] dark:[color-scheme:dark]"
                             autoFocus
                         />
-                        <div className="mt-3 flex justify-end">
-                            <button 
-                                type="button"
-                                onClick={() => setIsDatePickerOpen(false)}
-                                className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded-md transition-colors shadow-lg"
-                            >
-                                Done
-                            </button>
-                        </div>
                     </div>
                 )}
              </div>
              
-             {/* Priority & Submit */}
-             <div className="flex items-center gap-2 shrink-0">
-                 <div className="relative">
-                    <select 
-                    value={newPriority}
-                    onChange={(e) => setNewPriority(e.target.value as any)}
-                    className="appearance-none bg-slate-800 text-xs font-medium text-slate-300 border border-slate-700 rounded-lg py-1.5 pl-3 pr-8 focus:outline-none focus:border-blue-500/50 cursor-pointer hover:bg-slate-750"
-                    title="Priority"
-                    >
-                        <option value="High">High Priority</option>
-                        <option value="Medium">Medium</option>
-                        <option value="Low">Low</option>
-                    </select>
-                    <div className="absolute right-2 top-1.5 pointer-events-none text-slate-500 text-[10px]">
-                        ▼
-                    </div>
-                 </div>
-
-                 <button
-                    type="submit"
-                    disabled={!newTaskTitle.trim()}
-                    className="p-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 disabled:text-slate-500 text-white rounded-lg transition-colors shadow-lg flex items-center justify-center"
-                 >
-                    <Plus className="w-4 h-4" />
+             <select 
+                value={newPriority}
+                onChange={(e) => setNewPriority(e.target.value as any)}
+                className="bg-transparent text-xs text-slate-400 dark:text-white/30 border-none focus:ring-0 cursor-pointer"
+             >
+                <option value="Low">Low</option>
+                <option value="Medium">Medium</option>
+                <option value="High">High</option>
+             </select>
+             
+             {newTaskTitle && (
+                 <button type="submit" className="text-blue-600 dark:text-blue-500 hover:text-blue-500 dark:hover:text-blue-400">
+                     <Plus className="w-5 h-5" />
                  </button>
-             </div>
-          </div>
+             )}
         </form>
-      </div>
-
-      {/* Task List */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-2">
-        {filteredTasks.length === 0 && (
-            <div className="h-full flex flex-col items-center justify-center text-slate-600 space-y-2 opacity-50">
-                <Check className="w-12 h-12" />
-                <p className="text-sm">All caught up!</p>
-            </div>
-        )}
-
-        {filteredTasks.map(task => {
-            const timing = getTaskTiming(task.dueDate);
-            
-            return (
-                <div 
-                  key={task.id}
-                  className={`group flex items-start p-3 rounded-lg border transition-all duration-300 ${
-                      task.completed 
-                      ? 'bg-slate-900/50 border-transparent opacity-50 grayscale' 
-                      : 'bg-slate-800 border-slate-700 hover:border-slate-600 shadow-sm'
-                  } ${timing.isOverdue && !task.completed ? 'border-l-4 border-l-red-500 bg-red-900/5' : ''}`}
-                >
-                   <button
-                     onClick={() => onToggleTask(task.id)}
-                     className={`mt-0.5 w-5 h-5 rounded border flex items-center justify-center transition-colors ${
-                         task.completed 
-                         ? 'bg-blue-600 border-blue-600 text-white' 
-                         : 'border-slate-500 hover:border-blue-400 text-transparent'
-                     }`}
-                   >
-                     <Check className="w-3.5 h-3.5" />
-                   </button>
-                   
-                   <div className="ml-3 flex-1 min-w-0">
-                      <div className="flex items-start justify-between gap-2">
-                          <span className={`text-sm truncate font-medium ${task.completed ? 'line-through text-slate-500' : 'text-slate-200'}`}>
-                              {task.title}
-                          </span>
-                          <span className={`text-[10px] px-1.5 py-0.5 rounded border uppercase tracking-wide font-bold shrink-0 ${getPriorityColor(task.priority)}`}>
-                              {task.priority}
-                          </span>
-                      </div>
-                      
-                      <div className="flex flex-wrap items-center mt-1 gap-x-3 gap-y-1">
-                          <div className={`flex items-center text-xs ${timing.isOverdue && !task.completed ? 'text-red-400' : 'text-slate-500'}`} title={timing.friendlyDate}>
-                              <Calendar className="w-3 h-3 mr-1" />
-                              {timing.friendlyDate}
-                          </div>
-                          {!task.completed && (
-                            <div className={`flex items-center text-[10px] font-mono px-1.5 py-0.5 rounded border ${
-                                timing.isOverdue 
-                                ? 'bg-red-500/10 text-red-400 border-red-500/20' 
-                                : 'bg-blue-500/10 text-blue-300 border-blue-500/20'
-                            }`}>
-                                <Clock className="w-3 h-3 mr-1" />
-                                {timing.countdown}
-                            </div>
-                          )}
-                      </div>
-                   </div>
-
-                   <button 
-                     onClick={() => onDeleteTask(task.id)}
-                     className="ml-2 opacity-0 group-hover:opacity-100 p-1.5 text-slate-500 hover:text-red-400 hover:bg-red-500/10 rounded transition-all"
-                   >
-                       <Trash2 className="w-4 h-4" />
-                   </button>
-                </div>
-            );
-        })}
-      </div>
-
-      {/* Footer Stats */}
-      <div className="p-3 bg-slate-900 border-t border-slate-800 text-[10px] text-slate-500 flex justify-between uppercase tracking-wider font-medium">
-          <span>{pendingCount} Pending</span>
-          <span>Auto-Refreshes</span>
       </div>
     </div>
   );
