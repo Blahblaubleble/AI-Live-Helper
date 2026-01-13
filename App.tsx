@@ -429,7 +429,7 @@ const App: React.FC = () => {
   };
   const handleSendText = (e?: React.FormEvent) => {
     e?.preventDefault();
-    if (!inputText.trim() || connectionState !== ConnectionState.CONNECTED) return;
+    if (!inputText.trim()) return;
     serviceRef.current?.sendTextMessage(inputText);
     setInputText('');
   };
@@ -686,7 +686,6 @@ const App: React.FC = () => {
                                                 value={inputText}
                                                 onChange={(e) => setInputText(e.target.value)}
                                                 placeholder="Type a message..."
-                                                disabled={connectionState !== ConnectionState.CONNECTED}
                                                 className="w-full bg-slate-100 dark:bg-black/20 border border-slate-200 dark:border-white/10 rounded-full pl-5 pr-12 py-3 text-sm text-slate-900 dark:text-white focus:outline-none focus:bg-white dark:focus:bg-black/40 focus:border-blue-400 dark:focus:border-white/20 transition-all placeholder-slate-400 dark:placeholder-white/30"
                                             />
                                             <button type="submit" disabled={!inputText.trim()} className="absolute right-2 top-1.5 p-1.5 bg-blue-600 rounded-full text-white hover:bg-blue-500 disabled:opacity-0 transition-all shadow-md">
