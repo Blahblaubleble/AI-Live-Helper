@@ -218,7 +218,7 @@ const App: React.FC = () => {
             setViewMode('tasks');
             return `Task '${title}' added to project.`;
         },
-        editTask: (originalTitle, newTitle, newPriority) => {
+        editTask: (originalTitle, newTitle, newPriority, newDueDate) => {
              if (!activeProjectIdRef.current) return "No active project.";
              const currentProject = projectsRef.current.find(p => p.id === activeProjectIdRef.current);
              if (!currentProject) return "Active project not found.";
@@ -242,6 +242,14 @@ const App: React.FC = () => {
                      if (['Low', 'Medium', 'High'].includes(normalized)) {
                          updates.priority = normalized;
                          msgParts.push(`priority set to ${normalized}`);
+                     }
+                 }
+
+                 if (newDueDate) {
+                     const date = new Date(newDueDate);
+                     if (!isNaN(date.getTime())) {
+                         updates.dueDate = date.toISOString();
+                         msgParts.push(`due date set to ${date.toLocaleString()}`);
                      }
                  }
                  

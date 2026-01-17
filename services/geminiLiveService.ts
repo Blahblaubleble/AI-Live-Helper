@@ -9,7 +9,7 @@ export interface ToolExecutors {
   createProject: (name: string) => string;
   switchProject: (name: string) => string;
   addTask: (title: string, priority: string) => string;
-  editTask: (originalTitle: string, newTitle?: string, newPriority?: string) => string;
+  editTask: (originalTitle: string, newTitle?: string, newPriority?: string, newDueDate?: string) => string;
   markTaskComplete: (title: string) => string;
   getTasks: () => string;
 }
@@ -65,7 +65,7 @@ const TOOLS: FunctionDeclaration[] = [
   },
   {
     name: "edit_task",
-    description: "Update an existing task's title or priority. You must provide the original title to identify the task.",
+    description: "Update an existing task's title, priority, or due date. You must provide the original title to identify the task.",
     parameters: {
       type: Type.OBJECT,
       properties: {
@@ -75,7 +75,8 @@ const TOOLS: FunctionDeclaration[] = [
             type: Type.STRING, 
             description: "The new priority level (Low, Medium, High) (optional).",
             enum: ["Low", "Medium", "High"]
-        }
+        },
+        newDueDate: { type: Type.STRING, description: "The new due date (ISO 8601 format preferred). Use the current date context to calculate relative dates like 'tomorrow'." }
       },
       required: ["originalTitle"]
     }
@@ -273,6 +274,8 @@ export class GeminiLiveService {
           tools: [{ functionDeclarations: TOOLS }],
           systemInstruction: `You are J.A.R.V.I.S., a highly advanced, formal, and efficient AI system. 
           
+          CURRENT DATE: ${new Date().toLocaleString()}
+
           WAKE WORD PROTOCOL:
           You are monitoring a continuous audio stream. You must ONLY respond, speak, or execute tools if the user explicitly says the name "Jarvis" (or "J.A.R.V.I.S"). 
           If the user speaks but does not address you as "Jarvis", you must remain silent and do nothing.
@@ -361,7 +364,7 @@ export class GeminiLiveService {
               case 'add_task':
                   return this.callbacks.toolExecutors.addTask(args.title, args.priority || 'Medium');
               case 'edit_task':
-                  return this.callbacks.toolExecutors.editTask(args.originalTitle, args.newTitle, args.newPriority);
+                  return this.callbacks.toolExecutors.editTask(args.originalTitle, args.newTitle, args.newPriority, args.newDueDate);
               case 'mark_task_complete':
                   return this.callbacks.toolExecutors.markTaskComplete(args.title);
               case 'get_tasks':
@@ -646,6 +649,8 @@ export class GeminiLiveService {
           // Sync system instruction with the Live one
           systemInstruction: `You are J.A.R.V.I.S., an advanced, formal, and efficient AI assistant.
           
+          CURRENT DATE: ${new Date().toLocaleString()}
+
           PERSONA:
           Your tone is formal, polite, British, and concise. Address the user as "Sir".
 
