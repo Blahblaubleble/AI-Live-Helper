@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { GeminiLiveService, ToolExecutors } from './services/geminiLiveService';
 import ScreenShare, { ScreenShareHandle } from './components/ScreenShare';
+import Visualizer from './components/Visualizer';
 import LoginPage from './components/LoginPage';
 import TodoList from './components/TodoList'; 
 import { db } from './services/database';
 import { ConnectionState, LogEntry, UsageStats, Project, User, Task } from './types';
-import { Play, Mic, MicOff, Monitor, ArrowRight, Video, VideoOff, Folder, Trash2, Zap, Plus, X, ListTodo, MessageSquare, Sun, Moon, LogOut, Download } from 'lucide-react';
+import { Play, Mic, MicOff, Monitor, ArrowRight, Video, VideoOff, Folder, Trash2, Zap, Plus, X, ListTodo, MessageSquare, Sun, Moon, LogOut, Download, Bot } from 'lucide-react';
 
 const FREE_TIER_LIMITS = { TPM: 1000000, RPD: 1500 };
 
@@ -75,6 +76,9 @@ const App: React.FC = () => {
   const newProjectInputRef = useRef<HTMLInputElement>(null);
   const [stats, setStats] = useState<UsageStats>({ imagesSent: 0, modelTurns: 0, estimatedTokens: 0, tokensPerMinute: 0 });
   const [dailyRequests, setDailyRequests] = useState(0);
+  
+  // Audio Levels
+  const [audioLevels, setAudioLevels] = useState({ user: 0, ai: 0 });
 
   const serviceRef = useRef<GeminiLiveService | null>(null);
   const screenShareRef = useRef<ScreenShareHandle>(null);
@@ -168,7 +172,31 @@ const App: React.FC = () => {
             return `Project '${name}' not found.`;
         },
         addTask: (title, priority) => {
-            if (!activeProjectIdRef.current) return "No active project.";
+            let currentProjectId = activeProjectIdRef.current;
+            
+            // Auto-create "General" project if none is selected
+            if (!currentProjectId) {
+                const existingGeneral = projectsRef.current.find(p => p.name === "General");
+                if (existingGeneral) {
+                    currentProjectId = existingGeneral.id;
+                    setActiveProjectId(existingGeneral.id);
+                } else {
+                     const newProject: Project = {
+                        id: Math.random().toString(36).substring(2, 9),
+                        name: "General",
+                        createdAt: new Date().toISOString(),
+                        lastActive: new Date().toISOString(),
+                        logs: [],
+                        tasks: []
+                    };
+                    const updated = [...projectsRef.current, newProject];
+                    setProjects(updated);
+                    if (user) db.saveProjects(user.username, updated);
+                    setActiveProjectId(newProject.id);
+                    currentProjectId = newProject.id;
+                }
+            }
+
             const validPriority = (['Low', 'Medium', 'High'].includes(priority) ? priority : 'Medium') as 'Low'|'Medium'|'High';
             const today = new Date();
             today.setHours(23, 59, 59, 999);
@@ -180,14 +208,59 @@ const App: React.FC = () => {
                 dueDate: today.toISOString(),
                 createdAt: new Date().toISOString(),
             };
+            
             setProjects(prev => prev.map(p => {
-                if (p.id === activeProjectIdRef.current) {
+                if (p.id === currentProjectId) {
                     return { ...p, tasks: [...(p.tasks || []), newTask], lastActive: new Date().toISOString() };
                 }
                 return p;
             }));
             setViewMode('tasks');
-            return `Task '${title}' added.`;
+            return `Task '${title}' added to project.`;
+        },
+        editTask: (originalTitle, newTitle, newPriority) => {
+             if (!activeProjectIdRef.current) return "No active project.";
+             const currentProject = projectsRef.current.find(p => p.id === activeProjectIdRef.current);
+             if (!currentProject) return "Active project not found.";
+             
+             // Fuzzy match finder
+             const searchTitle = originalTitle.toLowerCase().trim();
+             const task = currentProject.tasks.find(t => t.title.toLowerCase().includes(searchTitle));
+             
+             if (task) {
+                 let updates: any = {};
+                 let msgParts = [];
+                 
+                 if (newTitle && newTitle.trim()) {
+                     updates.title = newTitle.trim();
+                     msgParts.push(`renamed to '${newTitle.trim()}'`);
+                 }
+                 
+                 if (newPriority) {
+                     // Normalize priority (e.g. "high" -> "High")
+                     const normalized = newPriority.charAt(0).toUpperCase() + newPriority.slice(1).toLowerCase();
+                     if (['Low', 'Medium', 'High'].includes(normalized)) {
+                         updates.priority = normalized;
+                         msgParts.push(`priority set to ${normalized}`);
+                     }
+                 }
+                 
+                 if (Object.keys(updates).length === 0) return "No changes requested for the task.";
+
+                 setProjects(prev => prev.map(p => {
+                    if (p.id === activeProjectIdRef.current) {
+                        return { 
+                            ...p, 
+                            tasks: p.tasks.map(t => t.id === task.id ? { ...t, ...updates } : t),
+                            lastActive: new Date().toISOString()
+                        };
+                    }
+                    return p;
+                }));
+                setViewMode('tasks');
+                return `Task '${task.title}' updated: ${msgParts.join(', ')}.`;
+             }
+             return `Task '${originalTitle}' not found.`;
         },
         markTaskComplete: (title) => {
              if (!activeProjectIdRef.current) return "No active project.";
@@ -237,6 +310,7 @@ const App: React.FC = () => {
       },
       onDisconnect: () => {
         setConnectionState(ConnectionState.IDLE);
+        setAudioLevels({ user: 0, ai: 0 });
         addLog('system', 'Disconnected.');
       },
       onError: (err) => {
@@ -276,6 +350,7 @@ const App: React.FC = () => {
         });
       },
       onStats: (newStats) => setStats({ ...newStats }),
+      onVolumeUpdate: (userVol, aiVol) => setAudioLevels({ user: userVol, ai: aiVol }),
       toolExecutors
     });
 
@@ -624,8 +699,34 @@ const App: React.FC = () => {
                             </div>
 
                             {/* Controls */}
-                            <div className="bg-white/40 dark:bg-white/5 rounded-2xl p-4 border border-white/20 dark:border-white/5 backdrop-blur-md shadow-sm">
-                                <div className="flex items-center justify-between mb-4">
+                            <div className="bg-white/40 dark:bg-white/5 rounded-2xl p-4 border border-white/20 dark:border-white/5 backdrop-blur-md shadow-sm space-y-4">
+                                
+                                {/* Audio Visualizers - The Core Interaction Enhancement */}
+                                <div className="grid grid-cols-2 gap-3">
+                                    <div className="bg-white/50 dark:bg-black/30 rounded-xl p-3 border border-white/20 dark:border-white/5 flex flex-col gap-2">
+                                        <div className="flex items-center gap-2 text-xs font-semibold text-slate-600 dark:text-white/70">
+                                            <Mic className={`w-3.5 h-3.5 ${audioLevels.user > 0.1 ? 'text-blue-500' : ''}`} />
+                                            Microphone
+                                        </div>
+                                        <div className="h-12 w-full bg-slate-200/50 dark:bg-black/40 rounded-lg overflow-hidden relative">
+                                            <Visualizer isActive={connectionState === ConnectionState.CONNECTED} volume={audioLevels.user} color="#3b82f6" />
+                                        </div>
+                                    </div>
+
+                                    <div className="bg-white/50 dark:bg-black/30 rounded-xl p-3 border border-white/20 dark:border-white/5 flex flex-col gap-2">
+                                        <div className="flex items-center gap-2 text-xs font-semibold text-slate-600 dark:text-white/70">
+                                            <Bot className={`w-3.5 h-3.5 ${audioLevels.ai > 0.1 ? 'text-purple-500' : ''}`} />
+                                            AI Voice
+                                        </div>
+                                        <div className="h-12 w-full bg-slate-200/50 dark:bg-black/40 rounded-lg overflow-hidden relative">
+                                            <Visualizer isActive={connectionState === ConnectionState.CONNECTED} volume={audioLevels.ai} color="#a855f7" />
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="h-px bg-slate-200 dark:bg-white/10 w-full" />
+
+                                <div className="flex items-center justify-between">
                                     <div className="flex items-center gap-3">
                                         <button onClick={handleMuteToggle} disabled={connectionState !== ConnectionState.CONNECTED} className={`p-3 rounded-full transition-all ${isMuted ? 'bg-red-500 text-white' : 'bg-slate-200 dark:bg-white/10 text-slate-600 dark:text-white hover:bg-slate-300 dark:hover:bg-white/20'}`}>
                                             {isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}

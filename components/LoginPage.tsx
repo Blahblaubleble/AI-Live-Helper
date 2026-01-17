@@ -160,13 +160,13 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin, theme = 'dark' }) => {
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
                         placeholder="Enter Password"
-                        className="w-full bg-white/60 dark:bg-white/10 backdrop-blur-md border border-white/40 dark:border-white/20 rounded-xl px-4 py-2.5 text-center text-slate-800 dark:text-white placeholder-slate-500 dark:placeholder-white/40 focus:outline-none focus:bg-white/80 dark:focus:bg-white/20 focus:border-blue-400 dark:focus:border-white/40 transition-all shadow-lg"
+                        className="w-full bg-white/60 dark:bg-white/10 backdrop-blur-md border border-white/40 dark:border-white/20 rounded-xl pl-4 pr-12 py-2.5 text-center text-slate-800 dark:text-white placeholder-slate-500 dark:placeholder-white/40 focus:outline-none focus:bg-white/80 dark:focus:bg-white/20 focus:border-blue-400 dark:focus:border-white/40 transition-all shadow-lg"
                      />
                      {password && (
                          <button 
                            type="button" 
                            onClick={() => setShowPassword(!showPassword)}
-                           className="absolute right-3 top-2.5 text-slate-500 dark:text-white/50 hover:text-slate-800 dark:hover:text-white"
+                           className="absolute right-10 top-2.5 text-slate-500 dark:text-white/50 hover:text-slate-800 dark:hover:text-white"
                          >
                             {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                          </button>
@@ -208,10 +208,6 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin, theme = 'dark' }) => {
                    <input type="file" accept=".json" className="hidden" onChange={handleRestoreBackup} />
                </label>
           </div>
-      </div>
-      
-      <div className="fixed bottom-6 text-slate-400 dark:text-white/30 text-[10px] font-medium tracking-widest uppercase">
-          Mac Style Secure Workspace
       </div>
     </div>
   );

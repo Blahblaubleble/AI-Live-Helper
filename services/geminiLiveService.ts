@@ -9,6 +9,7 @@ export interface ToolExecutors {
   createProject: (name: string) => string;
   switchProject: (name: string) => string;
   addTask: (title: string, priority: string) => string;
+  editTask: (originalTitle: string, newTitle?: string, newPriority?: string) => string;
   markTaskComplete: (title: string) => string;
   getTasks: () => string;
 }
@@ -19,6 +20,7 @@ interface LiveServiceCallbacks {
   onError: (error: Error) => void;
   onTranscript: (text: string, sender: 'user' | 'ai' | 'system', isFinal: boolean, responseTime?: number) => void;
   onStats: (stats: UsageStats) => void;
+  onVolumeUpdate: (userVolume: number, aiVolume: number) => void;
   toolExecutors: ToolExecutors;
 }
 
@@ -62,6 +64,23 @@ const TOOLS: FunctionDeclaration[] = [
     }
   },
   {
+    name: "edit_task",
+    description: "Update an existing task's title or priority. You must provide the original title to identify the task.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        originalTitle: { type: Type.STRING, description: "The current title (or part of it) to identify the task." },
+        newTitle: { type: Type.STRING, description: "The new title to set (optional)." },
+        newPriority: { 
+            type: Type.STRING, 
+            description: "The new priority level (Low, Medium, High) (optional).",
+            enum: ["Low", "Medium", "High"]
+        }
+      },
+      required: ["originalTitle"]
+    }
+  },
+  {
     name: "mark_task_complete",
     description: "Mark a task as completed in the current project by finding a task that matches the title.",
     parameters: {
@@ -87,6 +106,7 @@ export class GeminiLiveService {
   private session: LiveSession | null = null;
   private inputAudioContext: AudioContext | null = null;
   private outputAudioContext: AudioContext | null = null;
+  private outputAnalyser: AnalyserNode | null = null;
   private inputSource: MediaStreamAudioSourceNode | null = null;
   private processor: ScriptProcessorNode | null = null;
   private mediaStream: MediaStream | null = null;
@@ -110,6 +130,10 @@ export class GeminiLiveService {
   private lastUserInteractionTime: number = 0;
   private responsePending: boolean = false;
   private currentTurnLatency: number | undefined = undefined;
+
+  // Volume tracking
+  private volumeInterval: number | null = null;
+  private currentInputVolume = 0;
 
   // Usage Stats
   private stats: UsageStats = {
@@ -137,11 +161,11 @@ export class GeminiLiveService {
 
   private loadVoices() {
     const voices = this.synthesis.getVoices();
-    // Prioritize Google voices or decent English voices
-    this.voice = voices.find(v => v.name.includes("Google US English")) || 
-                 voices.find(v => v.name.includes("Google") && v.lang.startsWith("en")) || 
-                 voices.find(v => v.lang === "en-US") || 
-                 voices.find(v => v.lang.startsWith("en")) || 
+    // Prioritize British English voices for Jarvis persona
+    this.voice = voices.find(v => v.name.includes("Google UK English Male")) || 
+                 voices.find(v => v.lang === "en-GB" && v.name.includes("Male")) ||
+                 voices.find(v => v.lang === "en-GB") ||
+                 voices.find(v => v.name.includes("Google US English")) || 
                  voices[0] || null;
   }
 
@@ -188,7 +212,31 @@ export class GeminiLiveService {
       // OUTPUT: Use NATIVE sample rate.
       this.outputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
       
+      // Setup Analyser for AI Voice Visualization
+      this.outputAnalyser = this.outputAudioContext.createAnalyser();
+      this.outputAnalyser.fftSize = 64; // Low resolution is fine for volume
+      this.outputAnalyser.smoothingTimeConstant = 0.5;
+      this.outputAnalyser.connect(this.outputAudioContext.destination);
+
       this.nextStartTime = this.outputAudioContext.currentTime;
+
+      // Start Volume Polling Loop
+      if (this.volumeInterval) clearInterval(this.volumeInterval);
+      this.volumeInterval = window.setInterval(() => {
+          let aiVol = 0;
+          if (this.outputAnalyser) {
+              const data = new Uint8Array(this.outputAnalyser.frequencyBinCount);
+              this.outputAnalyser.getByteFrequencyData(data);
+              const sum = data.reduce((a, b) => a + b, 0);
+              aiVol = sum / data.length / 255; // Normalize 0-1
+          }
+          
+          // Smooth decay for input volume to prevent stuttering visuals
+          this.currentInputVolume *= 0.85;
+          if (this.currentInputVolume < 0.01) this.currentInputVolume = 0;
+
+          this.callbacks.onVolumeUpdate(this.currentInputVolume, aiVol);
+      }, 50);
 
       // 2. Get User Media (Microphone)
       this.mediaStream = await navigator.mediaDevices.getUserMedia({ 
@@ -223,7 +271,29 @@ export class GeminiLiveService {
           responseModalities: [Modality.AUDIO],
           // Provide the tools to the model
           tools: [{ functionDeclarations: TOOLS }],
-          systemInstruction: "You are ScreenSentinel, an expert AI co-pilot. You can see the user's screen and hear their voice. You have access to tools to manage their Project and To-Do list directly. If the user asks to create a project, add a task, or check something off, USE THE TOOLS. Do not just say you will do it. Use the `get_tasks` tool if the user asks to read the list or asks what they need to do. Always confirm the action briefly.",
+          systemInstruction: `You are J.A.R.V.I.S., a highly advanced, formal, and efficient AI system. 
+          
+          WAKE WORD PROTOCOL:
+          You are monitoring a continuous audio stream. You must ONLY respond, speak, or execute tools if the user explicitly says the name "Jarvis" (or "J.A.R.V.I.S"). 
+          If the user speaks but does not address you as "Jarvis", you must remain silent and do nothing.
+
+          PERSONA:
+          Your tone is formal, polite, British, and concise. Similar to Tony Stark's AI. 
+          Address the user as "Sir" (or "Ma'am").
+          Be incredibly helpful but succinct.
+
+          CONFIRMATION PROTOCOL:
+          After executing any tool (like adding a task or switching projects), you MUST explicitly confirm the action to the user verbaly.
+          Example: "I have added 'Buy milk' to your list, Sir." or "Project 'Alpha' created."
+
+          VISUAL CONTEXT:
+          You have continuous access to the user's screen.
+          1. Use this visual context to answer questions about what is displayed (e.g., "What is this error?", "Who is that?").
+          2. If the user refers to "this" or "that", use the screen content to identify the object.
+
+          CAPABILITIES:
+          You have tools to manage Projects and To-Do lists. Use them immediately when commanded.
+          `,
           inputAudioTranscription: {},
           outputAudioTranscription: {},
         }
@@ -250,6 +320,16 @@ export class GeminiLiveService {
       if (!this.session) return;
 
       const inputData = e.inputBuffer.getChannelData(0);
+      
+      // Calculate Input Volume (RMS)
+      let sum = 0;
+      for (let i = 0; i < inputData.length; i++) {
+          sum += inputData[i] * inputData[i];
+      }
+      const rms = Math.sqrt(sum / inputData.length);
+      // Boost sensitivity for visualizer
+      this.currentInputVolume = Math.min(1, rms * 5); 
+
       const pcmBlob = createPcmBlob(inputData);
       
       // Calculate duration based on actual sample rate to be accurate even if fallback occurs
@@ -271,6 +351,29 @@ export class GeminiLiveService {
     this.processor.connect(this.inputAudioContext.destination);
   }
 
+  private executeTool(name: string, args: any): string {
+      try {
+          switch(name) {
+              case 'create_project':
+                  return this.callbacks.toolExecutors.createProject(args.name);
+              case 'switch_project':
+                  return this.callbacks.toolExecutors.switchProject(args.name);
+              case 'add_task':
+                  return this.callbacks.toolExecutors.addTask(args.title, args.priority || 'Medium');
+              case 'edit_task':
+                  return this.callbacks.toolExecutors.editTask(args.originalTitle, args.newTitle, args.newPriority);
+              case 'mark_task_complete':
+                  return this.callbacks.toolExecutors.markTaskComplete(args.title);
+              case 'get_tasks':
+                  return this.callbacks.toolExecutors.getTasks();
+              default:
+                  return "Unknown tool.";
+          }
+      } catch (e: any) {
+          return `Error executing tool: ${e.message}`;
+      }
+  }
+
   private async handleMessage(message: LiveServerMessage) {
     // Track User Input Activity
     if (message.serverContent?.inputTranscription) {
@@ -284,29 +387,7 @@ export class GeminiLiveService {
         // Execute tool logic
         const responses = [];
         for (const fc of message.toolCall.functionCalls) {
-            let result = "Unknown tool.";
-            try {
-                const args = fc.args as any;
-                switch(fc.name) {
-                    case 'create_project':
-                        result = this.callbacks.toolExecutors.createProject(args.name);
-                        break;
-                    case 'switch_project':
-                        result = this.callbacks.toolExecutors.switchProject(args.name);
-                        break;
-                    case 'add_task':
-                        result = this.callbacks.toolExecutors.addTask(args.title, args.priority || 'Medium');
-                        break;
-                    case 'mark_task_complete':
-                        result = this.callbacks.toolExecutors.markTaskComplete(args.title);
-                        break;
-                    case 'get_tasks':
-                        result = this.callbacks.toolExecutors.getTasks();
-                        break;
-                }
-            } catch (e: any) {
-                result = `Error executing tool: ${e.message}`;
-            }
+            const result = this.executeTool(fc.name, fc.args);
 
             responses.push({
                 id: fc.id,
@@ -394,8 +475,14 @@ export class GeminiLiveService {
     
     // Create a GainNode for smoothing (anti-pop) only at start
     const gainNode = this.outputAudioContext.createGain();
+    
+    // Routing: Source -> Gain -> Analyser -> Destination
     source.connect(gainNode);
-    gainNode.connect(this.outputAudioContext.destination);
+    if (this.outputAnalyser) {
+        gainNode.connect(this.outputAnalyser);
+    } else {
+        gainNode.connect(this.outputAudioContext.destination);
+    }
 
     const currentTime = this.outputAudioContext.currentTime;
     
@@ -507,6 +594,17 @@ export class GeminiLiveService {
       }
   }
 
+  // Safe helper to extract text without triggering getter warnings
+  private getTextFromChunk(chunk: GenerateContentResponse): string | null {
+      const parts = chunk.candidates?.[0]?.content?.parts;
+      if (!parts) return null;
+      let text = '';
+      for (const part of parts) {
+          if (part.text) text += part.text;
+      }
+      return text || null;
+  }
+
   public async sendTextMessage(text: string) {
     this.stopAudioOutput();
 
@@ -543,8 +641,26 @@ export class GeminiLiveService {
         model: 'gemini-3-flash-preview',
         contents: { parts },
         config: {
+          // Provide tools to the text model
+          tools: [{ functionDeclarations: TOOLS }],
           // Sync system instruction with the Live one
-          systemInstruction: "You are a helpful AI assistant that can see the user's screen. The user is sharing their screen with you via a continuous stream of images. ALWAYS use the visual information from these images to answer questions. If the user asks 'what do you see' or about specific content on the screen, describe the latest image you received. Do not say you cannot see the screen unless you genuinely have received no image data at all. Be concise and conversational."
+          systemInstruction: `You are J.A.R.V.I.S., an advanced, formal, and efficient AI assistant.
+          
+          PERSONA:
+          Your tone is formal, polite, British, and concise. Address the user as "Sir".
+
+          CONFIRMATION PROTOCOL:
+          After executing any tool, you MUST explicitly confirm to the user that the task was completed successfully.
+          
+          CONTEXT:
+          You are receiving a text message and a stream of screen images. The user is sharing their screen with you.
+          ALWAYS use the visual information from these images to answer questions.
+          If the user asks 'what do you see' or about specific content on the screen, describe the latest image you received.
+          
+          TOOLS:
+          You have tools to manage the user's Project and To-Do list.
+          If the user asks to create a task, edit a task, create a project, or complete a task, use the appropriate tool.
+          `
         }
       });
 
@@ -554,14 +670,26 @@ export class GeminiLiveService {
       
       for await (const chunk of stream) {
         const c = chunk as GenerateContentResponse;
-        if (c.text) {
+        
+        // Handle Tool Calls in text mode
+        if (c.functionCalls && c.functionCalls.length > 0) {
+            for (const fc of c.functionCalls) {
+                const result = this.executeTool(fc.name, fc.args);
+                this.callbacks.onTranscript(`[Tool Executed: ${fc.name}] -> ${result}`, 'system', true);
+            }
+        }
+
+        // Use safe helper instead of c.text to avoid warnings on non-text chunks
+        const chunkText = this.getTextFromChunk(c);
+        
+        if (chunkText) {
           // Capture latency on first token
           if (latency === undefined) {
              latency = Date.now() - startTime;
           }
 
-          fullText += c.text;
-          textBuffer += c.text;
+          fullText += chunkText;
+          textBuffer += chunkText;
           this.callbacks.onTranscript(fullText, 'ai', false, latency);
 
           // Process complete sentences for smoother TTS
@@ -626,6 +754,12 @@ export class GeminiLiveService {
     if (this.statsInterval) {
         clearInterval(this.statsInterval);
         this.statsInterval = null;
+    }
+    
+    // Stop Volume Polling
+    if (this.volumeInterval) {
+        clearInterval(this.volumeInterval);
+        this.volumeInterval = null;
     }
 
     const wasConnected = this.session !== null;
