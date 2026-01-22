@@ -58,6 +58,16 @@ const UsageBar = ({ label, current, max }: { label: string, current: number, max
   );
 };
 
+// Helper to safely format time
+const safeFormatTime = (date: Date): string => {
+    try {
+        if (isNaN(date.getTime())) return '';
+        return date.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+    } catch (e) {
+        return '';
+    }
+};
+
 const App: React.FC = () => {
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
   const [user, setUser] = useState<User | null>(null);
@@ -207,6 +217,7 @@ const App: React.FC = () => {
                 priority: validPriority,
                 dueDate: today.toISOString(),
                 createdAt: new Date().toISOString(),
+                subtasks: []
             };
             
             setProjects(prev => prev.map(p => {
@@ -217,6 +228,45 @@ const App: React.FC = () => {
             }));
             setViewMode('tasks');
             return `Task '${title}' added to project.`;
+        },
+        addSubtask: (parentTitle, subtaskTitle) => {
+            if (!activeProjectIdRef.current) return "No active project.";
+            const currentProject = projectsRef.current.find(p => p.id === activeProjectIdRef.current);
+            if (!currentProject) return "Active project not found.";
+            
+            // Fuzzy match parent task
+            const parentTask = currentProject.tasks.find(t => t.title.toLowerCase().includes(parentTitle.toLowerCase()));
+            
+            if (parentTask) {
+                const newSubtask: Task = {
+                    id: Math.random().toString(36).substring(2, 9),
+                    title: subtaskTitle,
+                    completed: false,
+                    priority: 'Medium', // Inherit or default? Default for now
+                    dueDate: '', // No due date by default for subtasks
+                    createdAt: new Date().toISOString(),
+                    subtasks: []
+                };
+
+                setProjects(prev => prev.map(p => {
+                    if (p.id === activeProjectIdRef.current) {
+                        return {
+                            ...p,
+                            tasks: p.tasks.map(t => {
+                                if (t.id === parentTask.id) {
+                                    return { ...t, subtasks: [...(t.subtasks || []), newSubtask] };
+                                }
+                                return t;
+                            }),
+                            lastActive: new Date().toISOString()
+                        };
+                    }
+                    return p;
+                }));
+                setViewMode('tasks');
+                return `Subtask '${subtaskTitle}' added to '${parentTask.title}'.`;
+            }
+            return `Parent task '${parentTitle}' not found.`;
         },
         editTask: (originalTitle, newTitle, newPriority, newDueDate) => {
              if (!activeProjectIdRef.current) return "No active project.";
@@ -552,6 +602,80 @@ const App: React.FC = () => {
       }));
   };
 
+  // Subtask Wrappers
+  const handleAddSubtask = (parentId: string, subtaskTitle: string) => {
+      if (!activeProjectId) return;
+      const newSubtask: Task = {
+        id: Math.random().toString(36).substring(2, 9),
+        title: subtaskTitle,
+        completed: false,
+        priority: 'Medium',
+        dueDate: '',
+        createdAt: new Date().toISOString(),
+        subtasks: []
+      };
+
+      setProjects(prev => prev.map(p => {
+          if (p.id === activeProjectId) {
+              return {
+                  ...p,
+                  tasks: p.tasks.map(t => {
+                      if (t.id === parentId) {
+                          return { ...t, subtasks: [...(t.subtasks || []), newSubtask] };
+                      }
+                      return t;
+                  }),
+                  lastActive: new Date().toISOString()
+              };
+          }
+          return p;
+      }));
+  };
+
+  const handleToggleSubtask = (parentId: string, subtaskId: string) => {
+    if (!activeProjectId) return;
+    setProjects(prev => prev.map(p => {
+        if (p.id === activeProjectId) {
+            return {
+                ...p,
+                tasks: p.tasks.map(t => {
+                    if (t.id === parentId) {
+                        return { 
+                            ...t, 
+                            subtasks: (t.subtasks || []).map(st => st.id === subtaskId ? { ...st, completed: !st.completed } : st)
+                        };
+                    }
+                    return t;
+                }),
+                lastActive: new Date().toISOString()
+            };
+        }
+        return p;
+    }));
+  };
+
+  const handleDeleteSubtask = (parentId: string, subtaskId: string) => {
+    if (!activeProjectId) return;
+    setProjects(prev => prev.map(p => {
+        if (p.id === activeProjectId) {
+            return {
+                ...p,
+                tasks: p.tasks.map(t => {
+                    if (t.id === parentId) {
+                        return { 
+                            ...t, 
+                            subtasks: (t.subtasks || []).filter(st => st.id !== subtaskId)
+                        };
+                    }
+                    return t;
+                }),
+                lastActive: new Date().toISOString()
+            };
+        }
+        return p;
+    }));
+  };
+
   const activeProject = projects.find(p => p.id === activeProjectId);
 
   const toggleTheme = () => setTheme(prev => prev === 'dark' ? 'light' : 'dark');
@@ -781,7 +905,9 @@ const App: React.FC = () => {
                                                     </div>
                                                 )}
                                                 {log.sender !== 'system' && (
-                                                    <span className="text-[10px] text-slate-400 dark:text-white/20 mt-1 px-1">{new Date(log.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
+                                                    <span className="text-[10px] text-slate-400 dark:text-white/20 mt-1 px-1">
+                                                        {safeFormatTime(log.timestamp instanceof Date ? log.timestamp : new Date(log.timestamp))}
+                                                    </span>
                                                 )}
                                             </div>
                                         ))}
@@ -812,6 +938,9 @@ const App: React.FC = () => {
                                             onToggleTask={handleToggleTask}
                                             onDeleteTask={handleDeleteTask}
                                             onEditTask={handleEditTask}
+                                            onAddSubtask={handleAddSubtask}
+                                            onToggleSubtask={handleToggleSubtask}
+                                            onDeleteSubtask={handleDeleteSubtask}
                                         />
                                     ) : (
                                         <div className="h-full flex flex-col items-center justify-center opacity-40">

@@ -9,6 +9,7 @@ export interface ToolExecutors {
   createProject: (name: string) => string;
   switchProject: (name: string) => string;
   addTask: (title: string, priority: string) => string;
+  addSubtask: (parentTitle: string, subtaskTitle: string) => string;
   editTask: (originalTitle: string, newTitle?: string, newPriority?: string, newDueDate?: string) => string;
   markTaskComplete: (title: string) => string;
   getTasks: () => string;
@@ -61,6 +62,18 @@ const TOOLS: FunctionDeclaration[] = [
         }
       },
       required: ["title"]
+    }
+  },
+  {
+    name: "add_subtask",
+    description: "Add a smaller sub-task to an existing task. Use this to break down larger tasks.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        parentTitle: { type: Type.STRING, description: "The title of the existing task to add this subtask to." },
+        subtaskTitle: { type: Type.STRING, description: "The content of the subtask." }
+      },
+      required: ["parentTitle", "subtaskTitle"]
     }
   },
   {
@@ -295,7 +308,9 @@ export class GeminiLiveService {
           2. If the user refers to "this" or "that", use the screen content to identify the object.
 
           CAPABILITIES:
-          You have tools to manage Projects and To-Do lists. Use them immediately when commanded.
+          You have tools to manage Projects and To-Do lists. 
+          You can add main tasks, and also break them down into subtasks using the 'add_subtask' tool.
+          Use them immediately when commanded.
           `,
           inputAudioTranscription: {},
           outputAudioTranscription: {},
@@ -363,6 +378,8 @@ export class GeminiLiveService {
                   return this.callbacks.toolExecutors.switchProject(args.name);
               case 'add_task':
                   return this.callbacks.toolExecutors.addTask(args.title, args.priority || 'Medium');
+              case 'add_subtask':
+                  return this.callbacks.toolExecutors.addSubtask(args.parentTitle, args.subtaskTitle);
               case 'edit_task':
                   return this.callbacks.toolExecutors.editTask(args.originalTitle, args.newTitle, args.newPriority, args.newDueDate);
               case 'mark_task_complete':

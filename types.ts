@@ -27,6 +27,7 @@ export interface Task {
   priority: 'Low' | 'Medium' | 'High';
   dueDate: string; // ISO String
   createdAt: string; // ISO String
+  subtasks?: Task[]; // Nested tasks
 }
 
 export interface Project {

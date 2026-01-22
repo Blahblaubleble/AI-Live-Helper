@@ -33,6 +33,13 @@ export interface Database {
 const PREFIX = 'screenSentinel_';
 const AUTH_PREFIX = 'auth_user_';
 
+// Helper to safely parse dates
+const safeDate = (val: any): Date => {
+    if (!val) return new Date();
+    const d = new Date(val);
+    return isNaN(d.getTime()) ? new Date() : d;
+};
+
 export const LocalStorageDB: Database = {
   
   async userExists(username: string): Promise<boolean> {
@@ -71,8 +78,8 @@ export const LocalStorageDB: Database = {
       // Re-hydrate Date objects and ensure tasks exist
       return parsed.map((p: any) => ({
         ...p,
-        logs: p.logs.map((l: any) => ({ ...l, timestamp: new Date(l.timestamp) })),
-        tasks: p.tasks || []
+        logs: (p.logs || []).map((l: any) => ({ ...l, timestamp: safeDate(l.timestamp) })),
+        tasks: (p.tasks || []).map((t: any) => ({ ...t, subtasks: t.subtasks || [] }))
       }));
     } catch (e) {
       console.error("DB Corrupt:", e);
@@ -215,8 +222,8 @@ export const SupabaseDB: Database = {
     // Supabase returns JSON automatically, we just need to fix Date strings and ensure tasks
     return data.projects.map((p: any) => ({
         ...p,
-        logs: p.logs.map((l: any) => ({ ...l, timestamp: new Date(l.timestamp) })),
-        tasks: p.tasks || []
+        logs: (p.logs || []).map((l: any) => ({ ...l, timestamp: safeDate(l.timestamp) })),
+        tasks: (p.tasks || []).map((t: any) => ({ ...t, subtasks: t.subtasks || [] }))
     }));
   },
 
