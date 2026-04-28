@@ -3,10 +3,13 @@ import { GeminiLiveService, ToolExecutors } from './services/geminiLiveService';
 import ScreenShare, { ScreenShareHandle } from './components/ScreenShare';
 import Visualizer from './components/Visualizer';
 import LoginPage from './components/LoginPage';
-import TodoList from './components/TodoList'; 
+import TodoList from './components/TodoList';
+import SchoolDashboard from './components/SchoolDashboard';
+import CalendarView from './components/CalendarView';
+import ManagingDashboard from './components/ManagingDashboard';
 import { db } from './services/database';
-import { ConnectionState, LogEntry, UsageStats, Project, User, Task } from './types';
-import { Play, Mic, MicOff, Monitor, ArrowRight, Video, VideoOff, Folder, Trash2, Zap, Plus, X, ListTodo, MessageSquare, Sun, Moon, LogOut, Download, Bot } from 'lucide-react';
+import { ConnectionState, LogEntry, UsageStats, Project, User, Task, Assignment, SchoolNote, CalendarEvent, Routine } from './types';
+import { Play, Mic, MicOff, Monitor, ArrowRight, Video, VideoOff, Folder, Trash2, Zap, Plus, X, ListTodo, MessageSquare, Sun, Moon, LogOut, Download, Bot, Calendar as CalendarIcon } from 'lucide-react';
 
 const FREE_TIER_LIMITS = { TPM: 1000000, RPD: 1500 };
 
@@ -78,9 +81,13 @@ const App: React.FC = () => {
   const [inputText, setInputText] = useState('');
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
+  const [schoolNotes, setSchoolNotes] = useState<SchoolNote[]>([]);
+  const [assignments, setAssignments] = useState<Assignment[]>([]);
+  const [routines, setRoutines] = useState<Routine[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [isDataLoaded, setIsDataLoaded] = useState(false);
-  const [viewMode, setViewMode] = useState<'chat' | 'tasks'>('chat');
+  const [viewMode, setViewMode] = useState<'chat' | 'tasks' | 'school' | 'calendar' | 'managing'>('chat');
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
   const newProjectInputRef = useRef<HTMLInputElement>(null);
@@ -97,11 +104,17 @@ const App: React.FC = () => {
   
   const logsRef = useRef<LogEntry[]>([]);
   const projectsRef = useRef<Project[]>([]);
+  const calendarEventsRef = useRef<CalendarEvent[]>([]);
+  const schoolNotesRef = useRef<SchoolNote[]>([]);
+  const assignmentsRef = useRef<Assignment[]>([]);
   const activeProjectIdRef = useRef<string | null>(null);
 
   // Sync refs
   useEffect(() => { logsRef.current = logs; }, [logs]);
   useEffect(() => { projectsRef.current = projects; }, [projects]);
+  useEffect(() => { calendarEventsRef.current = calendarEvents; }, [calendarEvents]);
+  useEffect(() => { schoolNotesRef.current = schoolNotes; }, [schoolNotes]);
+  useEffect(() => { assignmentsRef.current = assignments; }, [assignments]);
   useEffect(() => { activeProjectIdRef.current = activeProjectId; }, [activeProjectId]);
 
   // Load Data
@@ -112,6 +125,14 @@ const App: React.FC = () => {
         setDailyRequests(count);
         const loadedProjects = await db.getProjects(user.username);
         setProjects(loadedProjects);
+        const loadedEvents = await db.getCalendarEvents(user.username);
+        setCalendarEvents(loadedEvents);
+        const loadedNotes = await db.getSchoolNotes(user.username);
+        setSchoolNotes(loadedNotes);
+        const loadedAssignments = await db.getAssignments(user.username);
+        setAssignments(loadedAssignments);
+        const loadedRoutines = await db.getRoutines(user.username);
+        setRoutines(loadedRoutines);
         setIsDataLoaded(true);
     };
     loadData();
@@ -119,18 +140,31 @@ const App: React.FC = () => {
 
   // Auto-save
   useEffect(() => {
-    if (!user || !isDataLoaded || !activeProjectId) return;
+    if (!user || !isDataLoaded) return;
     const syncAndSave = () => {
         const currentProjects = projectsRef.current;
         const currentLogs = logsRef.current;
-        const updatedProjects = currentProjects.map(p => {
-            if (p.id === activeProjectId) {
-                return { ...p, logs: currentLogs, lastActive: new Date().toISOString() };
-            }
-            return p;
-        });
-        setProjects(updatedProjects);
-        db.saveProjects(user.username, updatedProjects).catch(err => console.error("Auto-save failed", err));
+        const currentEvents = calendarEventsRef.current;
+        const currentNotes = schoolNotesRef.current;
+        const currentAssignments = assignmentsRef.current;
+
+        if (activeProjectId) {
+             setProjects(prevProjects => {
+                 const updatedProjects = prevProjects.map(p => {
+                    if (p.id === activeProjectId) {
+                        return { ...p, logs: currentLogs, lastActive: new Date().toISOString() };
+                    }
+                    return p;
+                });
+                db.saveProjects(user.username, updatedProjects).catch(err => console.error("Auto-save projects failed", err));
+                return updatedProjects;
+             });
+        }
+        
+        setCalendarEvents(prev => { db.saveCalendarEvents(user.username, prev); return prev; });
+        setSchoolNotes(prev => { db.saveSchoolNotes(user.username, prev); return prev; });
+        setAssignments(prev => { db.saveAssignments(user.username, prev); return prev; });
+        setRoutines(prev => { db.saveRoutines(user.username, prev); return prev; });
     };
     const intervalId = setInterval(syncAndSave, 2000);
     return () => {
@@ -157,7 +191,6 @@ const App: React.FC = () => {
             db.saveProjects(user.username, updated);
             setActiveProjectId(newProject.id);
             setLogs([]);
-            setViewMode('tasks');
             return `Project '${name}' created.`;
         },
         switchProject: (name) => {
@@ -220,12 +253,16 @@ const App: React.FC = () => {
                 subtasks: []
             };
             
-            setProjects(prev => prev.map(p => {
-                if (p.id === currentProjectId) {
-                    return { ...p, tasks: [...(p.tasks || []), newTask], lastActive: new Date().toISOString() };
-                }
-                return p;
-            }));
+            setProjects(prev => {
+                const updated = prev.map(p => {
+                    if (p.id === currentProjectId) {
+                        return { ...p, tasks: [...(p.tasks || []), newTask], lastActive: new Date().toISOString() };
+                    }
+                    return p;
+                });
+                if(user) db.saveProjects(user.username, updated);
+                return updated;
+            });
             setViewMode('tasks');
             return `Task '${title}' added to project.`;
         },
@@ -248,21 +285,25 @@ const App: React.FC = () => {
                     subtasks: []
                 };
 
-                setProjects(prev => prev.map(p => {
-                    if (p.id === activeProjectIdRef.current) {
-                        return {
-                            ...p,
-                            tasks: p.tasks.map(t => {
-                                if (t.id === parentTask.id) {
-                                    return { ...t, subtasks: [...(t.subtasks || []), newSubtask] };
-                                }
-                                return t;
-                            }),
-                            lastActive: new Date().toISOString()
-                        };
-                    }
-                    return p;
-                }));
+                setProjects(prev => {
+                    const updated = prev.map(p => {
+                        if (p.id === activeProjectIdRef.current) {
+                            return {
+                                ...p,
+                                tasks: p.tasks.map(t => {
+                                    if (t.id === parentTask.id) {
+                                        return { ...t, subtasks: [...(t.subtasks || []), newSubtask] };
+                                    }
+                                    return t;
+                                }),
+                                lastActive: new Date().toISOString()
+                            };
+                        }
+                        return p;
+                    });
+                    if (user) db.saveProjects(user.username, updated);
+                    return updated;
+                });
                 setViewMode('tasks');
                 return `Subtask '${subtaskTitle}' added to '${parentTask.title}'.`;
             }
@@ -305,16 +346,20 @@ const App: React.FC = () => {
                  
                  if (Object.keys(updates).length === 0) return "No changes requested for the task.";
 
-                 setProjects(prev => prev.map(p => {
-                    if (p.id === activeProjectIdRef.current) {
-                        return { 
-                            ...p, 
-                            tasks: p.tasks.map(t => t.id === task.id ? { ...t, ...updates } : t),
-                            lastActive: new Date().toISOString()
-                        };
-                    }
-                    return p;
-                }));
+                 setProjects(prev => {
+                    const updated = prev.map(p => {
+                        if (p.id === activeProjectIdRef.current) {
+                            return { 
+                                ...p, 
+                                tasks: p.tasks.map(t => t.id === task.id ? { ...t, ...updates } : t),
+                                lastActive: new Date().toISOString()
+                            };
+                        }
+                        return p;
+                    });
+                    if (user) db.saveProjects(user.username, updated);
+                    return updated;
+                });
                 setViewMode('tasks');
                 return `Task '${task.title}' updated: ${msgParts.join(', ')}.`;
              }
@@ -326,16 +371,20 @@ const App: React.FC = () => {
              if (!currentProject) return "Active project not found.";
              const task = currentProject.tasks.find(t => t.title.toLowerCase().includes(title.toLowerCase()));
              if (task) {
-                 setProjects(prev => prev.map(p => {
-                    if (p.id === activeProjectIdRef.current) {
-                        return { 
-                            ...p, 
-                            tasks: p.tasks.map(t => t.id === task.id ? { ...t, completed: true } : t),
-                            lastActive: new Date().toISOString()
-                        };
-                    }
-                    return p;
-                }));
+                 setProjects(prev => {
+                    const updated = prev.map(p => {
+                        if (p.id === activeProjectIdRef.current) {
+                            return { 
+                                ...p, 
+                                tasks: p.tasks.map(t => t.id === task.id ? { ...t, completed: true } : t),
+                                lastActive: new Date().toISOString()
+                            };
+                        }
+                        return p;
+                    });
+                    if (user) db.saveProjects(user.username, updated);
+                    return updated;
+                });
                 setViewMode('tasks');
                 return `Task '${task.title}' marked as complete.`;
              }
@@ -354,6 +403,177 @@ const App: React.FC = () => {
              if (completed.length > 0) response += `\n\nCompleted:\n${completed.join('\n')}`;
              setViewMode('tasks'); 
              return response;
+        },
+        addAssignment: (subject, title, dueDate, details, priority) => {
+             const newAssignment: Assignment = {
+                 id: Math.random().toString(36).substring(2, 9),
+                 title,
+                 subject,
+                 dueDate: dueDate || '',
+                 status: 'To Do',
+                 priority: (priority as any) || 'Medium',
+                 details: details || '',
+                 createdAt: new Date().toISOString()
+             };
+             setAssignments(prev => [...prev, newAssignment]);
+             setViewMode('school');
+             return `Assignment '${title}' added to ${subject}.`;
+        },
+        createNote: (subject, title, content) => {
+             const newNote: SchoolNote = {
+                 id: Math.random().toString(36).substring(2, 9),
+                 title,
+                 subject,
+                 content,
+                 createdAt: new Date().toISOString()
+             };
+             setSchoolNotes(prev => [...prev, newNote]);
+             setViewMode('school');
+             return `Note '${title}' created for ${subject}.`;
+        },
+        getAssignments: () => {
+             const currentAssignments = assignmentsRef.current;
+             if (currentAssignments.length === 0) return "No assignments found.";
+             setViewMode('school');
+             return currentAssignments.map(a => `- ${a.title} (${a.subject}): ${a.status}, Due: ${a.dueDate}`).join('\n');
+        },
+        getNotes: () => {
+             const currentNotes = schoolNotesRef.current;
+             if (currentNotes.length === 0) return "No notes found.";
+             setViewMode('school');
+             return currentNotes.map(n => `- ${n.title} (${n.subject})`).join('\n');
+        },
+        addCalendarEvent: (title, startDate, endDate, description, location) => {
+             const newEvent: CalendarEvent = {
+                 id: Math.random().toString(36).substring(2, 9),
+                 title,
+                 startDate,
+                 endDate: endDate || new Date(new Date(startDate).getTime() + 3600000).toISOString(),
+                 description: description || '',
+                 location: location || '',
+                 type: 'event',
+                 color: 'bg-indigo-500'
+             };
+             setCalendarEvents(prev => [...prev, newEvent]);
+             setViewMode('calendar');
+             return `Event '${title}' added to calendar.`;
+        },
+        getCalendarEvents: () => {
+             const events = calendarEventsRef.current;
+             if (events.length === 0) return "No calendar events found.";
+             setViewMode('calendar');
+             return events.map(e => `- ${e.title} (${new Date(e.startDate).toLocaleString()})`).join('\n');
+        },
+        addRoutine: (title, frequency, startTime, endTime, daysOfWeek) => {
+            if (!user) return "Error: No user logged in.";
+            const newRoutine: Routine = {
+                id: Math.random().toString(36).substring(2, 9),
+                title,
+                frequency: frequency as 'Daily' | 'Weekly' | 'Monthly',
+                startTime,
+                endTime,
+                daysOfWeek,
+                createdAt: new Date().toISOString()
+            };
+            setRoutines(prev => {
+                const updated = [...prev, newRoutine];
+                db.saveRoutines(user.username, updated);
+                return updated;
+            });
+            setViewMode('managing');
+            return `Routine '${title}' added.`;
+        },
+        getRoutines: () => {
+            if (routines.length === 0) return "No routines found.";
+            setViewMode('managing');
+            return routines.map(r => `- ${r.title} (${r.frequency}${r.startTime && r.endTime ? ' from ' + r.startTime + ' to ' + r.endTime : ''})`).join('\n');
+        },
+        setViewMode: (mode) => {
+            setViewMode(mode);
+            return `Switched view to ${mode}.`;
+        },
+        deleteProject: (name) => {
+            if (!user) return "Error: No user logged in.";
+            const project = projectsRef.current.find(p => p.name.toLowerCase().includes(name.toLowerCase()));
+            if (!project) return `Project '${name}' not found.`;
+            
+            const updated = projectsRef.current.filter(p => p.id !== project.id);
+            setProjects(updated);
+            db.saveProjects(user.username, updated);
+            
+            if (activeProjectIdRef.current === project.id) {
+                setActiveProjectId(null);
+                setLogs([]);
+            }
+            return `Project '${project.name}' deleted.`;
+        },
+        deleteTask: (title) => {
+            if (!activeProjectIdRef.current) return "No active project.";
+            const currentProject = projectsRef.current.find(p => p.id === activeProjectIdRef.current);
+            if (!currentProject) return "Active project not found.";
+            
+            const task = currentProject.tasks.find(t => t.title.toLowerCase().includes(title.toLowerCase()));
+            if (!task) return `Task '${title}' not found.`;
+            
+            setProjects(prev => {
+                const updated = prev.map(p => {
+                    if (p.id === activeProjectIdRef.current) {
+                        return { ...p, tasks: p.tasks.filter(t => t.id !== task.id), lastActive: new Date().toISOString() };
+                    }
+                    return p;
+                });
+                if (user) db.saveProjects(user.username, updated);
+                return updated;
+            });
+            return `Task '${task.title}' deleted.`;
+        },
+        updateAssignmentStatus: (title, status) => {
+            const assignment = assignmentsRef.current.find(a => a.title.toLowerCase().includes(title.toLowerCase()));
+            if (!assignment) return `Assignment '${title}' not found.`;
+            
+            setAssignments(prev => {
+                const updated = prev.map(a => a.id === assignment.id ? { ...a, status: status as any } : a);
+                if (user) db.saveAssignments(user.username, updated);
+                return updated;
+            });
+            return `Assignment '${assignment.title}' status updated to ${status}.`;
+        },
+        deleteAssignment: (title) => {
+            const assignment = assignmentsRef.current.find(a => a.title.toLowerCase().includes(title.toLowerCase()));
+            if (!assignment) return `Assignment '${title}' not found.`;
+            
+            setAssignments(prev => {
+                const updated = prev.filter(a => a.id !== assignment.id);
+                if (user) db.saveAssignments(user.username, updated);
+                return updated;
+            });
+            return `Assignment '${assignment.title}' deleted.`;
+        },
+        deleteNote: (title) => {
+            const note = schoolNotesRef.current.find(n => n.title.toLowerCase().includes(title.toLowerCase()));
+            if (!note) return `Note '${title}' not found.`;
+            
+            setSchoolNotes(prev => {
+                const updated = prev.filter(n => n.id !== note.id);
+                if (user) db.saveSchoolNotes(user.username, updated);
+                return updated;
+            });
+            return `Note '${note.title}' deleted.`;
+        },
+        deleteCalendarEvent: (title) => {
+            const event = calendarEventsRef.current.find(e => e.title.toLowerCase().includes(title.toLowerCase()));
+            if (!event) return `Event '${title}' not found.`;
+            
+            setCalendarEvents(prev => {
+                const updated = prev.filter(e => e.id !== event.id);
+                if (user) db.saveCalendarEvents(user.username, updated);
+                return updated;
+            });
+            return `Event '${event.title}' deleted.`;
+        },
+        setTheme: (newTheme) => {
+            setTheme(newTheme);
+            return `Theme set to ${newTheme}.`;
         }
     };
 
@@ -502,7 +722,6 @@ const App: React.FC = () => {
       if (project) {
           setActiveProjectId(id);
           setLogs(project.logs || []);
-          setViewMode('chat');
       }
   };
   const deleteProject = (e: React.MouseEvent, id: string) => {
@@ -530,7 +749,6 @@ const App: React.FC = () => {
       if (connectionState === ConnectionState.CONNECTED) handleStop();
       setActiveProjectId(null);
       setLogs([]);
-      setViewMode('chat');
   };
   const handleStart = () => {
     if (!process.env.API_KEY) {
@@ -560,11 +778,16 @@ const App: React.FC = () => {
     setIsVideoPaused(newState);
     serviceRef.current?.notifyVideoStateChange(newState);
   };
-  const handleSendText = (e?: React.FormEvent) => {
-    e?.preventDefault();
-    if (!inputText.trim()) return;
-    serviceRef.current?.sendTextMessage(inputText);
-    setInputText('');
+  const handleSendText = (e?: React.FormEvent | string) => {
+    if (typeof e !== 'string') {
+        e?.preventDefault();
+    }
+    const textToSend = typeof e === 'string' ? e : inputText;
+    if (!textToSend.trim()) return;
+    serviceRef.current?.sendTextMessage(textToSend);
+    if (typeof e !== 'string') {
+        setInputText('');
+    }
   };
   const handleVideoFrame = useCallback((base64: string) => {
     if (connectionState === ConnectionState.CONNECTED) {
@@ -575,31 +798,86 @@ const App: React.FC = () => {
   // Task Wrappers
   const handleAddTask = (task: Task) => {
       if (!activeProjectId) return;
-      setProjects(prev => prev.map(p => {
-          if (p.id === activeProjectId) return { ...p, tasks: [...(p.tasks || []), task], lastActive: new Date().toISOString() };
-          return p;
-      }));
+      setProjects(prev => {
+          const updated = prev.map(p => {
+              if (p.id === activeProjectId) return { ...p, tasks: [...(p.tasks || []), task], lastActive: new Date().toISOString() };
+              return p;
+          });
+          if (user) db.saveProjects(user.username, updated);
+          return updated;
+      });
   };
   const handleToggleTask = (taskId: string) => {
       if (!activeProjectId) return;
-      setProjects(prev => prev.map(p => {
-          if (p.id === activeProjectId) return { ...p, tasks: (p.tasks || []).map(t => t.id === taskId ? { ...t, completed: !t.completed } : t), lastActive: new Date().toISOString() };
-          return p;
-      }));
+      setProjects(prev => {
+          const updated = prev.map(p => {
+              if (p.id === activeProjectId) return { ...p, tasks: (p.tasks || []).map(t => t.id === taskId ? { ...t, completed: !t.completed } : t), lastActive: new Date().toISOString() };
+              return p;
+          });
+          if (user) db.saveProjects(user.username, updated);
+          return updated;
+      });
   };
   const handleEditTask = (taskId: string, newTitle: string) => {
     if (!activeProjectId) return;
-    setProjects(prev => prev.map(p => {
-        if (p.id === activeProjectId) return { ...p, tasks: (p.tasks || []).map(t => t.id === taskId ? { ...t, title: newTitle } : t), lastActive: new Date().toISOString() };
-        return p;
-    }));
+    setProjects(prev => {
+        const updated = prev.map(p => {
+            if (p.id === activeProjectId) return { ...p, tasks: (p.tasks || []).map(t => t.id === taskId ? { ...t, title: newTitle } : t), lastActive: new Date().toISOString() };
+            return p;
+        });
+        if (user) db.saveProjects(user.username, updated);
+        return updated;
+    });
   };
   const handleDeleteTask = (taskId: string) => {
       if (!activeProjectId) return;
-      setProjects(prev => prev.map(p => {
-          if (p.id === activeProjectId) return { ...p, tasks: (p.tasks || []).filter(t => t.id !== taskId), lastActive: new Date().toISOString() };
-          return p;
-      }));
+      setProjects(prev => {
+          const updated = prev.map(p => {
+              if (p.id === activeProjectId) return { ...p, tasks: (p.tasks || []).filter(t => t.id !== taskId), lastActive: new Date().toISOString() };
+              return p;
+          });
+          if (user) db.saveProjects(user.username, updated);
+          return updated;
+      });
+  };
+
+  const handleDeleteGlobalTask = (taskId: string) => {
+      setProjects(prev => {
+          const updated = prev.map(p => {
+              if (p.tasks?.some(t => t.id === taskId)) {
+                  return { ...p, tasks: p.tasks.filter(t => t.id !== taskId), lastActive: new Date().toISOString() };
+              }
+              return p;
+          });
+          if (user) db.saveProjects(user.username, updated);
+          return updated;
+      });
+  };
+
+  const handleDeleteAssignment = (assignmentId: string) => {
+      setAssignments(prev => {
+          const updated = prev.filter(a => a.id !== assignmentId);
+          if (user) db.saveAssignments(user.username, updated);
+          return updated;
+      });
+  };
+
+  const handleDeleteRoutine = (routineId: string) => {
+      setRoutines(prev => {
+          const updated = prev.filter(r => r.id !== routineId);
+          if (user) db.saveRoutines(user.username, updated);
+          return updated;
+      });
+  };
+
+  const handleToggleRoutineCalendar = (routineId: string) => {
+      setRoutines(prev => {
+          const updated = prev.map(r => 
+              r.id === routineId ? { ...r, showInCalendar: r.showInCalendar === false ? true : false } : r
+          );
+          if (user) db.saveRoutines(user.username, updated);
+          return updated;
+      });
   };
 
   // Subtask Wrappers
@@ -615,65 +893,109 @@ const App: React.FC = () => {
         subtasks: []
       };
 
-      setProjects(prev => prev.map(p => {
-          if (p.id === activeProjectId) {
-              return {
-                  ...p,
-                  tasks: p.tasks.map(t => {
-                      if (t.id === parentId) {
-                          return { ...t, subtasks: [...(t.subtasks || []), newSubtask] };
-                      }
-                      return t;
-                  }),
-                  lastActive: new Date().toISOString()
-              };
-          }
-          return p;
-      }));
+      setProjects(prev => {
+          const updated = prev.map(p => {
+              if (p.id === activeProjectId) {
+                  return {
+                      ...p,
+                      tasks: p.tasks.map(t => {
+                          if (t.id === parentId) {
+                              return { ...t, subtasks: [...(t.subtasks || []), newSubtask] };
+                          }
+                          return t;
+                      }),
+                      lastActive: new Date().toISOString()
+                  };
+              }
+              return p;
+          });
+          if (user) db.saveProjects(user.username, updated);
+          return updated;
+      });
   };
 
   const handleToggleSubtask = (parentId: string, subtaskId: string) => {
     if (!activeProjectId) return;
-    setProjects(prev => prev.map(p => {
-        if (p.id === activeProjectId) {
-            return {
-                ...p,
-                tasks: p.tasks.map(t => {
-                    if (t.id === parentId) {
-                        return { 
-                            ...t, 
-                            subtasks: (t.subtasks || []).map(st => st.id === subtaskId ? { ...st, completed: !st.completed } : st)
-                        };
-                    }
-                    return t;
-                }),
-                lastActive: new Date().toISOString()
-            };
-        }
-        return p;
-    }));
+    setProjects(prev => {
+        const updated = prev.map(p => {
+            if (p.id === activeProjectId) {
+                return {
+                    ...p,
+                    tasks: p.tasks.map(t => {
+                        if (t.id === parentId) {
+                            return { 
+                                ...t, 
+                                subtasks: (t.subtasks || []).map(st => st.id === subtaskId ? { ...st, completed: !st.completed } : st)
+                            };
+                        }
+                        return t;
+                    }),
+                    lastActive: new Date().toISOString()
+                };
+            }
+            return p;
+        });
+        if (user) db.saveProjects(user.username, updated);
+        return updated;
+    });
   };
 
   const handleDeleteSubtask = (parentId: string, subtaskId: string) => {
     if (!activeProjectId) return;
-    setProjects(prev => prev.map(p => {
-        if (p.id === activeProjectId) {
-            return {
-                ...p,
-                tasks: p.tasks.map(t => {
-                    if (t.id === parentId) {
-                        return { 
-                            ...t, 
-                            subtasks: (t.subtasks || []).filter(st => st.id !== subtaskId)
-                        };
-                    }
-                    return t;
-                }),
-                lastActive: new Date().toISOString()
-            };
-        }
-        return p;
-    }));
+    setProjects(prev => {
+        const updated = prev.map(p => {
+            if (p.id === activeProjectId) {
+                return {
+                    ...p,
+                    tasks: p.tasks.map(t => {
+                        if (t.id === parentId) {
+                            return { 
+                                ...t, 
+                                subtasks: (t.subtasks || []).filter(st => st.id !== subtaskId)
+                            };
+                        }
+                        return t;
+                    }),
+                    lastActive: new Date().toISOString()
+                };
+            }
+            return p;
+        });
+        if (user) db.saveProjects(user.username, updated);
+        return updated;
+    });
+  };
+
+  const handleAddAssignment = (assignment: Assignment) => {
+      setAssignments(prev => {
+          const updated = [...prev, assignment];
+          if (user) db.saveAssignments(user.username, updated);
+          return updated;
+      });
+  };
+
+  const handleAddNote = (note: SchoolNote) => {
+      setSchoolNotes(prev => {
+          const updated = [...prev, note];
+          if (user) db.saveSchoolNotes(user.username, updated);
+          return updated;
+      });
+  };
+
+  const handleAddEvent = (event: CalendarEvent) => {
+      setCalendarEvents(prev => {
+          const updated = [...prev, event];
+          if (user) db.saveCalendarEvents(user.username, updated);
+          return updated;
+      });
+  };
+
+  const handleAddRoutine = (routine: Routine) => {
+      setRoutines(prev => {
+          const updated = [...prev, routine];
+          if (user) db.saveRoutines(user.username, updated);
+          return updated;
+      });
   };
 
   const activeProject = projects.find(p => p.id === activeProjectId);
@@ -727,8 +1049,9 @@ const App: React.FC = () => {
                 )}
 
                 {/* Sidebar */}
-                <div className="w-64 bg-white/60 dark:bg-[#0f0f0f]/60 backdrop-blur-xl flex flex-col shrink-0 pt-5 pb-3 px-3 border-r border-slate-200 dark:border-white/5 transition-colors duration-500">
-                    <div className="flex-1 overflow-y-auto space-y-1">
+                {viewMode !== 'calendar' && viewMode !== 'managing' && (
+                    <div className="w-64 bg-white/60 dark:bg-[#0f0f0f]/60 backdrop-blur-xl flex flex-col shrink-0 pt-5 pb-3 px-3 border-r border-slate-200 dark:border-white/5 transition-colors duration-500">
+                        <div className="flex-1 overflow-y-auto space-y-1">
                         <div className="px-3 text-[10px] font-semibold text-slate-400 dark:text-white/40 uppercase tracking-widest mb-2 mt-2">Workspaces</div>
                         
                         <button onClick={switchToQuickSession} className={`w-full flex items-center gap-3 px-3 py-1.5 rounded-lg text-sm transition-all ${!activeProjectId ? 'bg-blue-600 text-white shadow-md' : 'text-slate-600 dark:text-white/70 hover:bg-slate-200 dark:hover:bg-white/10'}`}>
@@ -778,6 +1101,7 @@ const App: React.FC = () => {
                         </div>
                     </div>
                 </div>
+                )}
 
                 {/* Main Content Area */}
                 <div className="flex-1 flex flex-col bg-white/40 dark:bg-black/20 backdrop-blur-sm relative transition-colors duration-500">
@@ -799,86 +1123,91 @@ const App: React.FC = () => {
                         <div className="bg-slate-200 dark:bg-black/40 p-1 rounded-lg flex gap-1">
                             <button onClick={() => setViewMode('chat')} className={`px-3 py-1 rounded-md text-xs font-medium transition-all ${viewMode === 'chat' ? 'bg-white dark:bg-white/20 text-slate-900 dark:text-white shadow-sm' : 'text-slate-500 dark:text-white/40 hover:text-slate-900 dark:hover:text-white'}`}>Chat</button>
                             <button onClick={() => setViewMode('tasks')} className={`px-3 py-1 rounded-md text-xs font-medium transition-all ${viewMode === 'tasks' ? 'bg-white dark:bg-white/20 text-slate-900 dark:text-white shadow-sm' : 'text-slate-500 dark:text-white/40 hover:text-slate-900 dark:hover:text-white'}`}>Tasks</button>
+                            <button onClick={() => setViewMode('school')} className={`px-3 py-1 rounded-md text-xs font-medium transition-all ${viewMode === 'school' ? 'bg-white dark:bg-white/20 text-slate-900 dark:text-white shadow-sm' : 'text-slate-500 dark:text-white/40 hover:text-slate-900 dark:hover:text-white'}`}>School</button>
+                            <button onClick={() => setViewMode('calendar')} className={`px-3 py-1 rounded-md text-xs font-medium transition-all ${viewMode === 'calendar' ? 'bg-white dark:bg-white/20 text-slate-900 dark:text-white shadow-sm' : 'text-slate-500 dark:text-white/40 hover:text-slate-900 dark:hover:text-white'}`}>Calendar</button>
+                            <button onClick={() => setViewMode('managing')} className={`px-3 py-1 rounded-md text-xs font-medium transition-all ${viewMode === 'managing' ? 'bg-white dark:bg-white/20 text-slate-900 dark:text-white shadow-sm' : 'text-slate-500 dark:text-white/40 hover:text-slate-900 dark:hover:text-white'}`}>Managing</button>
                         </div>
                     </div>
 
                     <div className="flex-1 flex overflow-hidden">
                         {/* Left Panel: Monitor */}
-                        <div className="w-[45%] flex flex-col p-6 gap-6 border-r border-slate-200 dark:border-white/5 overflow-y-auto">
-                            
-                            <div className="bg-slate-200 dark:bg-black/40 rounded-2xl overflow-hidden aspect-video relative shadow-xl border border-white/20 dark:border-white/5 ring-1 ring-black/5 dark:ring-white/5 group">
-                                {connectionState === ConnectionState.IDLE ? (
-                                    <div className="absolute inset-0 flex flex-col items-center justify-center text-center p-8 bg-gradient-to-br from-white/40 to-transparent dark:from-white/5 dark:to-transparent">
-                                        <div className="w-16 h-16 rounded-full bg-white/50 dark:bg-white/5 flex items-center justify-center mb-4 backdrop-blur-sm border border-white/20 dark:border-white/10 shadow-sm">
-                                            <Monitor className="w-8 h-8 text-slate-400 dark:text-white/60" />
-                                        </div>
-                                        <h3 className="text-slate-700 dark:text-white font-medium mb-1">AI Monitor</h3>
-                                        <p className="text-xs text-slate-500 dark:text-white/40 mb-6">Connect to enable visual context</p>
-                                        <button onClick={handleStart} className="px-6 py-2 bg-slate-900 dark:bg-white text-white dark:text-black font-semibold rounded-full hover:scale-105 transition-transform shadow-lg shadow-black/10 dark:shadow-white/10 flex items-center gap-2">
-                                            <Play className="w-4 h-4 fill-current" /> Start Session
-                                        </button>
-                                    </div>
-                                ) : (
-                                    <ScreenShare 
-                                        ref={screenShareRef}
-                                        isActive={connectionState === ConnectionState.CONNECTED}
-                                        isPaused={isVideoPaused}
-                                        onFrame={handleVideoFrame}
-                                        onStop={() => { isScreenSharingRef.current = false; handleStop(); }}
-                                        onStart={() => { isScreenSharingRef.current = true; if(connectionState === ConnectionState.CONNECTED) serviceRef.current?.notifyScreenStart(); }}
-                                    />
-                                )}
-                            </div>
-
-                            {/* Controls */}
-                            <div className="bg-white/40 dark:bg-white/5 rounded-2xl p-4 border border-white/20 dark:border-white/5 backdrop-blur-md shadow-sm space-y-4">
+                        {viewMode !== 'calendar' && viewMode !== 'managing' && (
+                            <div className="w-[45%] flex flex-col p-6 gap-6 border-r border-slate-200 dark:border-white/5 overflow-y-auto">
                                 
-                                {/* Audio Visualizers - The Core Interaction Enhancement */}
-                                <div className="grid grid-cols-2 gap-3">
-                                    <div className="bg-white/50 dark:bg-black/30 rounded-xl p-3 border border-white/20 dark:border-white/5 flex flex-col gap-2">
-                                        <div className="flex items-center gap-2 text-xs font-semibold text-slate-600 dark:text-white/70">
-                                            <Mic className={`w-3.5 h-3.5 ${audioLevels.user > 0.1 ? 'text-blue-500' : ''}`} />
-                                            Microphone
+                                <div className="bg-slate-200 dark:bg-black/40 rounded-2xl overflow-hidden aspect-video relative shadow-xl border border-white/20 dark:border-white/5 ring-1 ring-black/5 dark:ring-white/5 group">
+                                    {connectionState === ConnectionState.IDLE ? (
+                                        <div className="absolute inset-0 flex flex-col items-center justify-center text-center p-8 bg-gradient-to-br from-white/40 to-transparent dark:from-white/5 dark:to-transparent">
+                                            <div className="w-16 h-16 rounded-full bg-white/50 dark:bg-white/5 flex items-center justify-center mb-4 backdrop-blur-sm border border-white/20 dark:border-white/10 shadow-sm">
+                                                <Monitor className="w-8 h-8 text-slate-400 dark:text-white/60" />
+                                            </div>
+                                            <h3 className="text-slate-700 dark:text-white font-medium mb-1">AI Monitor</h3>
+                                            <p className="text-xs text-slate-500 dark:text-white/40 mb-6">Connect to enable visual context</p>
+                                            <button onClick={handleStart} className="px-6 py-2 bg-slate-900 dark:bg-white text-white dark:text-black font-semibold rounded-full hover:scale-105 transition-transform shadow-lg shadow-black/10 dark:shadow-white/10 flex items-center gap-2">
+                                                <Play className="w-4 h-4 fill-current" /> Start Session
+                                            </button>
                                         </div>
-                                        <div className="h-12 w-full bg-slate-200/50 dark:bg-black/40 rounded-lg overflow-hidden relative">
-                                            <Visualizer isActive={connectionState === ConnectionState.CONNECTED} volume={audioLevels.user} color="#3b82f6" />
-                                        </div>
-                                    </div>
-
-                                    <div className="bg-white/50 dark:bg-black/30 rounded-xl p-3 border border-white/20 dark:border-white/5 flex flex-col gap-2">
-                                        <div className="flex items-center gap-2 text-xs font-semibold text-slate-600 dark:text-white/70">
-                                            <Bot className={`w-3.5 h-3.5 ${audioLevels.ai > 0.1 ? 'text-purple-500' : ''}`} />
-                                            AI Voice
-                                        </div>
-                                        <div className="h-12 w-full bg-slate-200/50 dark:bg-black/40 rounded-lg overflow-hidden relative">
-                                            <Visualizer isActive={connectionState === ConnectionState.CONNECTED} volume={audioLevels.ai} color="#a855f7" />
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <div className="h-px bg-slate-200 dark:bg-white/10 w-full" />
-
-                                <div className="flex items-center justify-between">
-                                    <div className="flex items-center gap-3">
-                                        <button onClick={handleMuteToggle} disabled={connectionState !== ConnectionState.CONNECTED} className={`p-3 rounded-full transition-all ${isMuted ? 'bg-red-500 text-white' : 'bg-slate-200 dark:bg-white/10 text-slate-600 dark:text-white hover:bg-slate-300 dark:hover:bg-white/20'}`}>
-                                            {isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
-                                        </button>
-                                        <button onClick={handleVideoPauseToggle} disabled={connectionState !== ConnectionState.CONNECTED} className={`p-3 rounded-full transition-all ${isVideoPaused ? 'bg-yellow-500 text-black' : 'bg-slate-200 dark:bg-white/10 text-slate-600 dark:text-white hover:bg-slate-300 dark:hover:bg-white/20'}`}>
-                                            {isVideoPaused ? <VideoOff className="w-5 h-5" /> : <Video className="w-5 h-5" />}
-                                        </button>
-                                    </div>
-                                    {connectionState === ConnectionState.CONNECTED && (
-                                        <button onClick={handleStop} className="px-4 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-500 dark:text-red-300 rounded-lg text-xs font-medium border border-red-500/20 transition-colors">
-                                            End Session
-                                        </button>
+                                    ) : (
+                                        <ScreenShare 
+                                            ref={screenShareRef}
+                                            isActive={connectionState === ConnectionState.CONNECTED}
+                                            isPaused={isVideoPaused}
+                                            onFrame={handleVideoFrame}
+                                            onStop={() => { isScreenSharingRef.current = false; handleStop(); }}
+                                            onStart={() => { isScreenSharingRef.current = true; if(connectionState === ConnectionState.CONNECTED) serviceRef.current?.notifyScreenStart(); }}
+                                        />
                                     )}
                                 </div>
-                                <div className="space-y-3">
-                                    <UsageBar label="Tokens / Min" current={stats.tokensPerMinute} max={FREE_TIER_LIMITS.TPM} unit="" />
-                                    <UsageBar label="Daily Requests" current={dailyRequests} max={FREE_TIER_LIMITS.RPD} unit="" />
+
+                                {/* Controls */}
+                                <div className="bg-white/40 dark:bg-white/5 rounded-2xl p-4 border border-white/20 dark:border-white/5 backdrop-blur-md shadow-sm space-y-4">
+                                    
+                                    {/* Audio Visualizers - The Core Interaction Enhancement */}
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <div className="bg-white/50 dark:bg-black/30 rounded-xl p-3 border border-white/20 dark:border-white/5 flex flex-col gap-2">
+                                            <div className="flex items-center gap-2 text-xs font-semibold text-slate-600 dark:text-white/70">
+                                                <Mic className={`w-3.5 h-3.5 ${audioLevels.user > 0.1 ? 'text-blue-500' : ''}`} />
+                                                Microphone
+                                            </div>
+                                            <div className="h-12 w-full bg-slate-200/50 dark:bg-black/40 rounded-lg overflow-hidden relative">
+                                                <Visualizer isActive={connectionState === ConnectionState.CONNECTED} volume={audioLevels.user} color="#3b82f6" />
+                                            </div>
+                                        </div>
+
+                                        <div className="bg-white/50 dark:bg-black/30 rounded-xl p-3 border border-white/20 dark:border-white/5 flex flex-col gap-2">
+                                            <div className="flex items-center gap-2 text-xs font-semibold text-slate-600 dark:text-white/70">
+                                                <Bot className={`w-3.5 h-3.5 ${audioLevels.ai > 0.1 ? 'text-purple-500' : ''}`} />
+                                                AI Voice
+                                            </div>
+                                            <div className="h-12 w-full bg-slate-200/50 dark:bg-black/40 rounded-lg overflow-hidden relative">
+                                                <Visualizer isActive={connectionState === ConnectionState.CONNECTED} volume={audioLevels.ai} color="#a855f7" />
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div className="h-px bg-slate-200 dark:bg-white/10 w-full" />
+
+                                    <div className="flex items-center justify-between">
+                                        <div className="flex items-center gap-3">
+                                            <button onClick={handleMuteToggle} disabled={connectionState !== ConnectionState.CONNECTED} className={`p-3 rounded-full transition-all ${isMuted ? 'bg-red-500 text-white' : 'bg-slate-200 dark:bg-white/10 text-slate-600 dark:text-white hover:bg-slate-300 dark:hover:bg-white/20'}`}>
+                                                {isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+                                            </button>
+                                            <button onClick={handleVideoPauseToggle} disabled={connectionState !== ConnectionState.CONNECTED} className={`p-3 rounded-full transition-all ${isVideoPaused ? 'bg-yellow-500 text-black' : 'bg-slate-200 dark:bg-white/10 text-slate-600 dark:text-white hover:bg-slate-300 dark:hover:bg-white/20'}`}>
+                                                {isVideoPaused ? <VideoOff className="w-5 h-5" /> : <Video className="w-5 h-5" />}
+                                            </button>
+                                        </div>
+                                        {connectionState === ConnectionState.CONNECTED && (
+                                            <button onClick={handleStop} className="px-4 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-500 dark:text-red-300 rounded-lg text-xs font-medium border border-red-500/20 transition-colors">
+                                                End Session
+                                            </button>
+                                        )}
+                                    </div>
+                                    <div className="space-y-3">
+                                        <UsageBar label="Tokens / Min" current={stats.tokensPerMinute} max={FREE_TIER_LIMITS.TPM} unit="" />
+                                        <UsageBar label="Daily Requests" current={dailyRequests} max={FREE_TIER_LIMITS.RPD} unit="" />
+                                    </div>
                                 </div>
                             </div>
-                        </div>
+                        )}
 
                         {/* Right Panel: Chat or Tasks */}
                         <div className="flex-1 bg-gradient-to-b from-white/20 to-transparent dark:from-white/5 dark:to-transparent flex flex-col relative">
@@ -929,6 +1258,44 @@ const App: React.FC = () => {
                                         </form>
                                     </div>
                                 </>
+                            ) : viewMode === 'school' ? (
+                                <div className="flex-1 overflow-hidden">
+                                    <SchoolDashboard 
+                                        assignments={assignments}
+                                        schoolNotes={schoolNotes}
+                                        onAddAssignment={handleAddAssignment}
+                                        onAddNote={handleAddNote}
+                                    />
+                                </div>
+                            ) : viewMode === 'calendar' ? (
+                                <div className="flex-1 overflow-hidden p-6">
+                                    <CalendarView 
+                                        events={calendarEvents}
+                                        tasks={projects.flatMap(p => p.tasks || [])}
+                                        assignments={assignments}
+                                        routines={routines}
+                                        onAddEvent={handleAddEvent}
+                                    />
+                                </div>
+                            ) : viewMode === 'managing' ? (
+                                <div className="flex-1 overflow-hidden">
+                                    <ManagingDashboard 
+                                        tasks={projects.flatMap(p => p.tasks || [])}
+                                        assignments={assignments}
+                                        routines={routines}
+                                        logs={logs}
+                                        onAddRoutine={handleAddRoutine}
+                                        onDeleteTask={handleDeleteGlobalTask}
+                                        onDeleteAssignment={handleDeleteAssignment}
+                                        onDeleteRoutine={handleDeleteRoutine}
+                                        onToggleRoutineCalendar={handleToggleRoutineCalendar}
+                                        onSendText={handleSendText}
+                                        audioLevels={audioLevels}
+                                        isMuted={isMuted}
+                                        onMuteToggle={() => setIsMuted(!isMuted)}
+                                        connectionState={connectionState}
+                                    />
+                                </div>
                             ) : (
                                 <div className="flex-1 overflow-hidden">
                                     {activeProjectId ? (

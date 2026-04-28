@@ -24,10 +24,12 @@ interface DatePriorityPickerProps {
   onDateChange: (date: Date | null) => void;
   selectedPriority: Priority;
   onPriorityChange: (p: Priority) => void;
+  estimatedTime: number | undefined;
+  onEstimatedTimeChange: (time: number | undefined) => void;
 }
 
 const DatePriorityPicker: React.FC<DatePriorityPickerProps> = ({ 
-  isOpen, onClose, selectedDate, onDateChange, selectedPriority, onPriorityChange 
+  isOpen, onClose, selectedDate, onDateChange, selectedPriority, onPriorityChange, estimatedTime, onEstimatedTimeChange 
 }) => {
   const [viewDate, setViewDate] = useState(selectedDate || new Date());
   // Time state (HH, MM strings)
@@ -256,6 +258,24 @@ const DatePriorityPicker: React.FC<DatePriorityPickerProps> = ({
                    ))}
                </div>
            </div>
+
+           {/* Estimated Time Selector */}
+           <div className="space-y-1.5 pt-2 border-t border-slate-100 dark:border-white/5 mt-2">
+               <div className="flex items-center justify-between">
+                   <span className="text-[10px] text-slate-400 dark:text-white/40 uppercase tracking-wider font-semibold">Est. Time (mins)</span>
+               </div>
+               <div className="flex gap-2">
+                   <input 
+                     type="number" 
+                     min="0" 
+                     step="5"
+                     value={estimatedTime || ''}
+                     onChange={(e) => onEstimatedTimeChange(e.target.value ? parseInt(e.target.value) : undefined)}
+                     placeholder="e.g. 30"
+                     className="w-full bg-slate-100 dark:bg-black/20 border border-slate-200 dark:border-white/10 rounded-lg px-3 py-1.5 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+                   />
+               </div>
+           </div>
        </div>
        
        {/* Actions */}
@@ -289,6 +309,7 @@ const TodoList: React.FC<TodoListProps> = ({
   const [newTaskTitle, setNewTaskTitle] = useState('');
   const [newPriority, setNewPriority] = useState<Priority>('Medium');
   const [newDueDate, setNewDueDate] = useState<Date | null>(null);
+  const [newEstimatedTime, setNewEstimatedTime] = useState<number | undefined>(undefined);
   
   const [isInputFocused, setIsInputFocused] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false); // Controls the unified date/priority popover
@@ -413,6 +434,7 @@ const TodoList: React.FC<TodoListProps> = ({
       completed: false,
       priority: newPriority,
       dueDate: finalDueDate,
+      estimatedTime: newEstimatedTime,
       createdAt: new Date().toISOString(),
       subtasks: []
     };
@@ -421,6 +443,7 @@ const TodoList: React.FC<TodoListProps> = ({
     setNewTaskTitle('');
     setNewPriority('Medium');
     setNewDueDate(null);
+    setNewEstimatedTime(undefined);
     setIsSettingsOpen(false);
     // Keep focus
     if(inputRef.current) inputRef.current.focus();
@@ -566,6 +589,11 @@ const TodoList: React.FC<TodoListProps> = ({
                                         </span>
                                         {task.priority === 'High' && (
                                             <span className="text-[10px] text-red-500 font-medium bg-red-500/10 px-1.5 rounded">High</span>
+                                        )}
+                                        {task.estimatedTime && (
+                                            <span className="text-[10px] text-slate-500 dark:text-white/40 bg-slate-100 dark:bg-white/5 px-1.5 rounded flex items-center gap-1">
+                                                <Clock className="w-3 h-3" /> {task.estimatedTime}m
+                                            </span>
                                         )}
                                     </div>
                                     {subtasks.length > 0 && (
@@ -762,6 +790,8 @@ const TodoList: React.FC<TodoListProps> = ({
                                 onDateChange={setNewDueDate}
                                 selectedPriority={newPriority}
                                 onPriorityChange={setNewPriority}
+                                estimatedTime={newEstimatedTime}
+                                onEstimatedTimeChange={setNewEstimatedTime}
                             />
                          </div>
 

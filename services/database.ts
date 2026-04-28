@@ -1,4 +1,4 @@
-import { Project } from '../types';
+import { Project, CalendarEvent, SchoolNote, Assignment, Routine } from '../types';
 import { createClient } from '@supabase/supabase-js';
 
 /**
@@ -20,6 +20,15 @@ export interface Database {
   // Data Management
   getProjects(username: string): Promise<Project[]>;
   saveProjects(username: string, projects: Project[]): Promise<void>;
+  getCalendarEvents(username: string): Promise<CalendarEvent[]>;
+  saveCalendarEvents(username: string, events: CalendarEvent[]): Promise<void>;
+  getSchoolNotes(username: string): Promise<SchoolNote[]>;
+  saveSchoolNotes(username: string, notes: SchoolNote[]): Promise<void>;
+  getAssignments(username: string): Promise<Assignment[]>;
+  saveAssignments(username: string, assignments: Assignment[]): Promise<void>;
+  getRoutines(username: string): Promise<Routine[]>;
+  saveRoutines(username: string, routines: Routine[]): Promise<void>;
+  saveAllData?(username: string, data: any): Promise<void>;
   
   // Stats
   getDailyStats(username: string): Promise<number>;
@@ -92,6 +101,70 @@ export const LocalStorageDB: Database = {
     localStorage.setItem(key, JSON.stringify(projects));
   },
 
+  async getCalendarEvents(username: string): Promise<CalendarEvent[]> {
+    const key = `${PREFIX}events_${username}`;
+    const stored = localStorage.getItem(key);
+    if (!stored) return [];
+    try {
+        return JSON.parse(stored);
+    } catch (e) {
+        return [];
+    }
+  },
+
+  async saveCalendarEvents(username: string, events: CalendarEvent[]): Promise<void> {
+    const key = `${PREFIX}events_${username}`;
+    localStorage.setItem(key, JSON.stringify(events));
+  },
+
+  async getSchoolNotes(username: string): Promise<SchoolNote[]> {
+    const key = `${PREFIX}school_notes_${username}`;
+    const stored = localStorage.getItem(key);
+    if (!stored) return [];
+    try {
+        return JSON.parse(stored);
+    } catch (e) {
+        return [];
+    }
+  },
+
+  async saveSchoolNotes(username: string, notes: SchoolNote[]): Promise<void> {
+    const key = `${PREFIX}school_notes_${username}`;
+    localStorage.setItem(key, JSON.stringify(notes));
+  },
+
+  async getAssignments(username: string): Promise<Assignment[]> {
+    const key = `${PREFIX}assignments_${username}`;
+    const stored = localStorage.getItem(key);
+    if (!stored) return [];
+    try {
+        return JSON.parse(stored);
+    } catch (e) {
+        return [];
+    }
+  },
+
+  async saveAssignments(username: string, assignments: Assignment[]): Promise<void> {
+    const key = `${PREFIX}assignments_${username}`;
+    localStorage.setItem(key, JSON.stringify(assignments));
+  },
+
+  async getRoutines(username: string): Promise<Routine[]> {
+    const key = `${PREFIX}routines_${username}`;
+    const stored = localStorage.getItem(key);
+    if (!stored) return [];
+    try {
+        return JSON.parse(stored);
+    } catch (e) {
+        return [];
+    }
+  },
+
+  async saveRoutines(username: string, routines: Routine[]): Promise<void> {
+    const key = `${PREFIX}routines_${username}`;
+    localStorage.setItem(key, JSON.stringify(routines));
+  },
+
   async getDailyStats(username: string): Promise<number> {
     const today = new Date().toDateString();
     const key = `${PREFIX}dailyStats_${username}`;
@@ -128,8 +201,12 @@ export const LocalStorageDB: Database = {
   async exportData(username: string): Promise<string> {
     const exportPayload: Record<string, string | null> = {};
     
-    // 1. Projects
+    // 1. Projects and Global Data
     exportPayload[`${PREFIX}projects_${username}`] = localStorage.getItem(`${PREFIX}projects_${username}`);
+    exportPayload[`${PREFIX}events_${username}`] = localStorage.getItem(`${PREFIX}events_${username}`);
+    exportPayload[`${PREFIX}school_notes_${username}`] = localStorage.getItem(`${PREFIX}school_notes_${username}`);
+    exportPayload[`${PREFIX}assignments_${username}`] = localStorage.getItem(`${PREFIX}assignments_${username}`);
+    exportPayload[`${PREFIX}routines_${username}`] = localStorage.getItem(`${PREFIX}routines_${username}`);
     
     // 2. Auth Record
     const authKey = `${AUTH_PREFIX}${username.toLowerCase()}`;
@@ -180,6 +257,32 @@ const supabase = (SUPABASE_URL.includes('YOUR_'))
   ? null 
   : createClient(SUPABASE_URL, SUPABASE_KEY);
 
+let bundleCache: any = null;
+let saveDebounce: any = null;
+
+async function getBundle(username: string) {
+  if (!supabase) return { _type: 'bundle' };
+  if (bundleCache) return bundleCache;
+  const { data } = await supabase.from('app_data').select('projects').eq('username', username).single();
+  let b = { _type: 'bundle' } as any;
+  if (data?.projects) {
+     if (data.projects._type === 'bundle') b = { ...data.projects };
+     else b = { _type: 'bundle', projects: data.projects };
+  }
+  bundleCache = b;
+  return b;
+}
+
+function queueSave(username: string) {
+  if (!supabase || !bundleCache) return;
+  clearTimeout(saveDebounce);
+  saveDebounce = setTimeout(async () => {
+    try {
+      await supabase.from('app_data').update({ projects: bundleCache }).eq('username', username);
+    } catch (e) {}
+  }, 300);
+}
+
 export const SupabaseDB: Database = {
   
   async userExists(username: string): Promise<boolean> {
@@ -201,7 +304,7 @@ export const SupabaseDB: Database = {
     const { error } = await supabase.from('app_data').insert({
         username,
         password_hash: passwordHash,
-        projects: [],
+        projects: { _type: 'bundle', projects: [] },
         daily_stats: { date: new Date().toDateString(), count: 0 }
     });
     if (error) console.error(error);
@@ -211,16 +314,18 @@ export const SupabaseDB: Database = {
   async verifyUser(username: string, passwordHash: string): Promise<boolean> {
     if (!supabase) return false;
     const { data } = await supabase.from('app_data').select('password_hash').eq('username', username).single();
-    return data?.password_hash === passwordHash;
+    if (data?.password_hash === passwordHash) {
+        bundleCache = null; // Clear cache on login
+        return true;
+    }
+    return false;
   },
 
   async getProjects(username: string): Promise<Project[]> {
-    if (!supabase) return [];
-    const { data } = await supabase.from('app_data').select('projects').eq('username', username).single();
-    if (!data?.projects) return [];
+    const bundle = await getBundle(username);
+    const rawProjects = bundle.projects || [];
     
-    // Supabase returns JSON automatically, we just need to fix Date strings and ensure tasks
-    return data.projects.map((p: any) => ({
+    return rawProjects.map((p: any) => ({
         ...p,
         logs: (p.logs || []).map((l: any) => ({ ...l, timestamp: safeDate(l.timestamp) })),
         tasks: (p.tasks || []).map((t: any) => ({ ...t, subtasks: t.subtasks || [] }))
@@ -228,8 +333,59 @@ export const SupabaseDB: Database = {
   },
 
   async saveProjects(username: string, projects: Project[]): Promise<void> {
-    if (!supabase) return;
-    await supabase.from('app_data').update({ projects }).eq('username', username);
+    const bundle = await getBundle(username);
+    bundle.projects = projects;
+    queueSave(username);
+  },
+
+  async getCalendarEvents(username: string): Promise<CalendarEvent[]> {
+    const bundle = await getBundle(username);
+    return bundle.calendarEvents || [];
+  },
+
+  async saveCalendarEvents(username: string, events: CalendarEvent[]): Promise<void> {
+    const bundle = await getBundle(username);
+    bundle.calendarEvents = events;
+    queueSave(username);
+  },
+
+  async getSchoolNotes(username: string): Promise<SchoolNote[]> {
+    const bundle = await getBundle(username);
+    return bundle.schoolNotes || [];
+  },
+
+  async saveSchoolNotes(username: string, notes: SchoolNote[]): Promise<void> {
+    const bundle = await getBundle(username);
+    bundle.schoolNotes = notes;
+    queueSave(username);
+  },
+
+  async getAssignments(username: string): Promise<Assignment[]> {
+    const bundle = await getBundle(username);
+    return bundle.assignments || [];
+  },
+
+  async saveAssignments(username: string, assignments: Assignment[]): Promise<void> {
+    const bundle = await getBundle(username);
+    bundle.assignments = assignments;
+    queueSave(username);
+  },
+
+  async getRoutines(username: string): Promise<Routine[]> {
+    const bundle = await getBundle(username);
+    return bundle.routines || [];
+  },
+
+  async saveRoutines(username: string, routines: Routine[]): Promise<void> {
+    const bundle = await getBundle(username);
+    bundle.routines = routines;
+    queueSave(username);
+  },
+
+  async saveAllData(username: string, payload: any): Promise<void> {
+    const bundle = await getBundle(username);
+    Object.assign(bundle, payload);
+    queueSave(username);
   },
 
   async getDailyStats(username: string): Promise<number> {

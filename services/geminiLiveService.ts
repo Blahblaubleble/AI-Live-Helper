@@ -13,6 +13,22 @@ export interface ToolExecutors {
   editTask: (originalTitle: string, newTitle?: string, newPriority?: string, newDueDate?: string) => string;
   markTaskComplete: (title: string) => string;
   getTasks: () => string;
+  addAssignment: (subject: string, title: string, dueDate?: string, details?: string, priority?: string) => string;
+  createNote: (subject: string, title: string, content: string) => string;
+  getAssignments: () => string;
+  getNotes: () => string;
+  addCalendarEvent: (title: string, startDate: string, endDate?: string, description?: string, location?: string) => string;
+  getCalendarEvents: () => string;
+  addRoutine: (title: string, frequency: string, startTime: string, endTime: string, daysOfWeek?: number[]) => string;
+  getRoutines: () => string;
+  setViewMode: (mode: 'chat' | 'tasks' | 'school' | 'calendar' | 'managing') => string;
+  deleteProject: (name: string) => string;
+  deleteTask: (title: string) => string;
+  updateAssignmentStatus: (title: string, status: string) => string;
+  deleteAssignment: (title: string) => string;
+  deleteNote: (title: string) => string;
+  deleteCalendarEvent: (title: string) => string;
+  setTheme: (theme: 'light' | 'dark') => string;
 }
 
 interface LiveServiceCallbacks {
@@ -44,6 +60,17 @@ const TOOLS: FunctionDeclaration[] = [
       type: Type.OBJECT,
       properties: {
         name: { type: Type.STRING, description: "The name of the project to switch to" }
+      },
+      required: ["name"]
+    }
+  },
+  {
+    name: "delete_project",
+    description: "Delete a project workspace by name.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        name: { type: Type.STRING, description: "The name of the project to delete" }
       },
       required: ["name"]
     }
@@ -106,11 +133,179 @@ const TOOLS: FunctionDeclaration[] = [
     }
   },
   {
+    name: "delete_task",
+    description: "Delete a task from the current project.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        title: { type: Type.STRING, description: "The title or partial title of the task to delete" }
+      },
+      required: ["title"]
+    }
+  },
+  {
     name: "get_tasks",
     description: "Get the list of all tasks in the current project to see what needs to be done.",
     parameters: {
       type: Type.OBJECT,
       properties: {},
+    }
+  },
+  {
+    name: "add_assignment",
+    description: "Add a new school assignment or homework.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        subject: { type: Type.STRING, description: "The subject (e.g., Math, History)" },
+        title: { type: Type.STRING, description: "The title of the assignment" },
+        dueDate: { type: Type.STRING, description: "Due date (ISO 8601 or relative like 'next Friday')" },
+        details: { type: Type.STRING, description: "Additional details or instructions" },
+        priority: { type: Type.STRING, enum: ["Low", "Medium", "High"], description: "Priority level" }
+      },
+      required: ["subject", "title"]
+    }
+  },
+  {
+    name: "update_assignment_status",
+    description: "Update the status of an assignment.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        title: { type: Type.STRING, description: "The title of the assignment" },
+        status: { type: Type.STRING, enum: ["To Do", "In Progress", "Done"], description: "The new status" }
+      },
+      required: ["title", "status"]
+    }
+  },
+  {
+    name: "delete_assignment",
+    description: "Delete an assignment.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        title: { type: Type.STRING, description: "The title of the assignment to delete" }
+      },
+      required: ["title"]
+    }
+  },
+  {
+    name: "create_note",
+    description: "Create a new study note for a specific subject.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        subject: { type: Type.STRING, description: "The subject this note belongs to" },
+        title: { type: Type.STRING, description: "Title of the note" },
+        content: { type: Type.STRING, description: "The content of the note" }
+      },
+      required: ["subject", "title", "content"]
+    }
+  },
+  {
+    name: "delete_note",
+    description: "Delete a study note.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        title: { type: Type.STRING, description: "The title of the note to delete" }
+      },
+      required: ["title"]
+    }
+  },
+  {
+    name: "get_assignments",
+    description: "Get a list of all current assignments.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {}
+    }
+  },
+  {
+    name: "get_notes",
+    description: "Get a list of all study notes.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {}
+    }
+  },
+  {
+    name: "add_calendar_event",
+    description: "Add a new event to the calendar.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        title: { type: Type.STRING, description: "Title of the event" },
+        startDate: { type: Type.STRING, description: "Start date/time (ISO 8601)" },
+        endDate: { type: Type.STRING, description: "End date/time (ISO 8601). If not provided, defaults to 1 hour after start." },
+        description: { type: Type.STRING, description: "Description of the event" },
+        location: { type: Type.STRING, description: "Location of the event" }
+      },
+      required: ["title", "startDate"]
+    }
+  },
+  {
+    name: "delete_calendar_event",
+    description: "Delete a calendar event.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        title: { type: Type.STRING, description: "The title of the event to delete" }
+      },
+      required: ["title"]
+    }
+  },
+  {
+    name: "get_calendar_events",
+    description: "Get upcoming calendar events.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {}
+    }
+  },
+  {
+    name: "add_routine",
+    description: "Add a recurring task or routine (e.g., daily workout, weekly meeting).",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        title: { type: Type.STRING, description: "Title of the routine" },
+        frequency: { type: Type.STRING, enum: ["Daily", "Weekly", "Monthly"], description: "How often it repeats" },
+        startTime: { type: Type.STRING, description: "Start time of day in HH:MM format" },
+        endTime: { type: Type.STRING, description: "End time of day in HH:MM format" },
+        daysOfWeek: { type: Type.ARRAY, items: { type: Type.NUMBER }, description: "Array of days (0-6, where 0 is Sunday) for Weekly routines (optional)" }
+      },
+      required: ["title", "frequency", "startTime", "endTime"]
+    }
+  },
+  {
+    name: "get_routines",
+    description: "Get all recurring tasks and routines.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {}
+    }
+  },
+  {
+    name: "set_view_mode",
+    description: "Switch the application view mode.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        mode: { type: Type.STRING, enum: ["chat", "tasks", "school", "calendar", "managing"], description: "The view mode to switch to" }
+      },
+      required: ["mode"]
+    }
+  },
+  {
+    name: "set_theme",
+    description: "Set the application theme.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        theme: { type: Type.STRING, enum: ["light", "dark"], description: "The theme to set" }
+      },
+      required: ["theme"]
     }
   }
 ];
@@ -308,9 +503,12 @@ export class GeminiLiveService {
           2. If the user refers to "this" or "that", use the screen content to identify the object.
 
           CAPABILITIES:
-          You have tools to manage Projects and To-Do lists. 
+          You have tools to manage Projects, To-Do lists, global School Assignments, Study Notes, Calendar Events, and Routines.
           You can add main tasks, and also break them down into subtasks using the 'add_subtask' tool.
-          Use them immediately when commanded.
+          School assignments and notes are global and not tied to any specific project.
+          Routines are recurring tasks or events (Daily, Weekly, Monthly) managed in the 'Managing' tab.
+          You can help balance the user's schedule by adding tasks, homework, and free time to the calendar or creating routines.
+          Use your tools immediately when commanded.
           `,
           inputAudioTranscription: {},
           outputAudioTranscription: {},
@@ -386,6 +584,38 @@ export class GeminiLiveService {
                   return this.callbacks.toolExecutors.markTaskComplete(args.title);
               case 'get_tasks':
                   return this.callbacks.toolExecutors.getTasks();
+              case 'add_assignment':
+                  return this.callbacks.toolExecutors.addAssignment(args.subject, args.title, args.dueDate, args.details, args.priority);
+              case 'create_note':
+                  return this.callbacks.toolExecutors.createNote(args.subject, args.title, args.content);
+              case 'get_assignments':
+                  return this.callbacks.toolExecutors.getAssignments();
+              case 'get_notes':
+                  return this.callbacks.toolExecutors.getNotes();
+              case 'add_calendar_event':
+                  return this.callbacks.toolExecutors.addCalendarEvent(args.title, args.startDate, args.endDate, args.description, args.location);
+              case 'get_calendar_events':
+                  return this.callbacks.toolExecutors.getCalendarEvents();
+              case 'add_routine':
+                  return this.callbacks.toolExecutors.addRoutine(args.title, args.frequency, args.startTime, args.endTime, args.daysOfWeek);
+              case 'get_routines':
+                  return this.callbacks.toolExecutors.getRoutines();
+              case 'set_view_mode':
+                  return this.callbacks.toolExecutors.setViewMode(args.mode);
+              case 'delete_project':
+                  return this.callbacks.toolExecutors.deleteProject(args.name);
+              case 'delete_task':
+                  return this.callbacks.toolExecutors.deleteTask(args.title);
+              case 'update_assignment_status':
+                  return this.callbacks.toolExecutors.updateAssignmentStatus(args.title, args.status);
+              case 'delete_assignment':
+                  return this.callbacks.toolExecutors.deleteAssignment(args.title);
+              case 'delete_note':
+                  return this.callbacks.toolExecutors.deleteNote(args.title);
+              case 'delete_calendar_event':
+                  return this.callbacks.toolExecutors.deleteCalendarEvent(args.title);
+              case 'set_theme':
+                  return this.callbacks.toolExecutors.setTheme(args.theme);
               default:
                   return "Unknown tool.";
           }
@@ -680,8 +910,10 @@ export class GeminiLiveService {
           If the user asks 'what do you see' or about specific content on the screen, describe the latest image you received.
           
           TOOLS:
-          You have tools to manage the user's Project and To-Do list.
-          If the user asks to create a task, edit a task, create a project, or complete a task, use the appropriate tool.
+          You have tools to manage the user's Projects, To-Do lists, global School Assignments, Study Notes, Calendar Events, and Routines.
+          School assignments and notes are global and not tied to any specific project.
+          Routines are recurring tasks or events managed in the 'Managing' tab.
+          If the user asks to create a task, edit a task, create a project, complete a task, add an assignment, create a note, or add a routine, use the appropriate tool.
           `
         }
       });
