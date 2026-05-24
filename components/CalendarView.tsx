@@ -1,28 +1,29 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, forwardRef, useImperativeHandle } from 'react';
 import { CalendarEvent, Task, Assignment, Routine } from '../types';
+import { computeSchedule } from '../utils/scheduler';
 import { ChevronLeft, ChevronRight, Plus, Clock, MapPin, AlignLeft, Calendar as CalendarIcon, X } from 'lucide-react';
 
-interface CalendarViewProps {
+export interface CalendarViewProps {
   events: CalendarEvent[];
   tasks: Task[];
   assignments: Assignment[];
   routines?: Routine[];
   onAddEvent: (event: CalendarEvent) => void;
+  currentDate: Date;
+  setCurrentDate: (date: Date) => void;
+  viewType: 'month' | 'week';
 }
 
-const CalendarView: React.FC<CalendarViewProps> = ({ events, tasks, assignments, routines = [], onAddEvent }) => {
-  const [currentDate, setCurrentDate] = useState(new Date());
+export interface CalendarViewRef {
+  openAddEvent: () => void;
+}
+
+const CalendarView = forwardRef<CalendarViewRef, CalendarViewProps>(({ 
+    events, tasks, assignments, routines = [], onAddEvent,
+    currentDate, setCurrentDate, viewType
+}, ref) => {
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [isAddEventOpen, setIsAddEventOpen] = useState(false);
-  const [viewType, setViewType] = useState<'month' | 'week'>(() => {
-    const saved = localStorage.getItem('calendarViewType');
-    return (saved === 'month' || saved === 'week') ? saved : 'month';
-  });
-
-  const handleSetViewType = (type: 'month' | 'week') => {
-    setViewType(type);
-    localStorage.setItem('calendarViewType', type);
-  };
   
   // New Event State
   const [newEventTitle, setNewEventTitle] = useState('');
@@ -31,189 +32,18 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tasks, assignments,
   const [newEventDesc, setNewEventDesc] = useState('');
   const [newEventLocation, setNewEventLocation] = useState('');
 
+  useImperativeHandle(ref, () => ({
+      openAddEvent: () => {
+          const now = new Date();
+          setSelectedDate(now);
+          setNewEventStart(now.toISOString().slice(0, 16));
+          setIsAddEventOpen(true);
+      }
+  }));
+
   // Combine all items into a unified event list
   const allEvents = useMemo(() => {
-    const combined: CalendarEvent[] = [...events];
-
-    // Map routines to events for the current view
-    const startOfView = new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1);
-    const endOfView = new Date(currentDate.getFullYear(), currentDate.getMonth() + 2, 0);
-
-    routines.forEach(routine => {
-      if (routine.showInCalendar === false && viewType === 'month') return;
-      
-      let current = new Date(startOfView);
-      while (current <= endOfView) {
-        let shouldAdd = false;
-        if (routine.frequency === 'Daily') {
-          shouldAdd = true;
-        } else if (routine.frequency === 'Weekly') {
-          const dayName = current.toLocaleDateString('en-US', { weekday: 'long' });
-          if (routine.daysOfWeek && routine.daysOfWeek.includes(dayName)) {
-            shouldAdd = true;
-          } else if (!routine.daysOfWeek && current.getDay() === 1) { // Default to Monday if no days specified
-            shouldAdd = true;
-          }
-        } else if (routine.frequency === 'Monthly') {
-          if (current.getDate() === 1) { // Default to 1st of month
-            shouldAdd = true;
-          }
-        }
-
-        if (shouldAdd) {
-          const eventDate = new Date(current);
-          if (routine.startTime) {
-            const [hours, minutes] = routine.startTime.split(':');
-            eventDate.setHours(parseInt(hours, 10), parseInt(minutes, 10), 0, 0);
-          } else {
-            eventDate.setHours(9, 0, 0, 0); // Default to 9 AM
-          }
-
-          const endDate = new Date(eventDate);
-          if (routine.endTime) {
-            const [hours, minutes] = routine.endTime.split(':');
-            endDate.setHours(parseInt(hours, 10), parseInt(minutes, 10), 0, 0);
-          } else {
-            endDate.setHours(eventDate.getHours() + 1); // Default 1 hour duration
-          }
-
-          combined.push({
-            id: `routine-${routine.id}-${current.toISOString().split('T')[0]}`,
-            title: `Routine: ${routine.title}`,
-            startDate: eventDate.toISOString(),
-            endDate: endDate.toISOString(),
-            type: 'event',
-            referenceId: routine.id,
-            color: 'bg-emerald-500'
-          });
-        }
-        current.setDate(current.getDate() + 1);
-      }
-    });
-
-    // Map tasks to events (Deadlines)
-    tasks.forEach(task => {
-      if (task.dueDate && !task.completed) {
-        combined.push({
-          id: `task-due-${task.id}`,
-          title: `Due: ${task.title}`,
-          startDate: task.dueDate,
-          endDate: task.dueDate,
-          type: 'task',
-          referenceId: task.id,
-          color: 'bg-red-500'
-        });
-      }
-    });
-
-    // Map assignments to events (Deadlines)
-    assignments.forEach(assignment => {
-      if (assignment.dueDate && assignment.status !== 'Done') {
-        combined.push({
-          id: `assign-due-${assignment.id}`,
-          title: `Due: ${assignment.title} (${assignment.subject})`,
-          startDate: assignment.dueDate,
-          endDate: assignment.dueDate,
-          type: 'assignment',
-          referenceId: assignment.id,
-          color: 'bg-red-500'
-        });
-      }
-    });
-
-    // --- Background Agent: Auto-Schedule Work Sessions ---
-    // We will find free slots in the next 7 days to work on pending tasks and assignments.
-    const now = new Date();
-    const nextWeek = new Date(now);
-    nextWeek.setDate(now.getDate() + 7);
-
-    // Get all occupied time slots in the next 7 days
-    const occupiedSlots = combined.filter(e => {
-        const start = new Date(e.startDate);
-        return start >= now && start <= nextWeek;
-    }).map(e => ({
-        start: new Date(e.startDate).getTime(),
-        end: new Date(e.endDate).getTime()
-    })).sort((a, b) => a.start - b.start);
-
-    const isSlotFree = (start: number, end: number) => {
-        // Check if the slot overlaps with any occupied slot
-        for (const slot of occupiedSlots) {
-            if ((start >= slot.start && start < slot.end) || 
-                (end > slot.start && end <= slot.end) ||
-                (start <= slot.start && end >= slot.end)) {
-                return false;
-            }
-        }
-        return true;
-    };
-
-    const findFreeSlot = (durationMs: number, deadline?: Date) => {
-        let currentSearchTime = new Date(now);
-        // Start searching from the next hour
-        currentSearchTime.setMinutes(0, 0, 0);
-        currentSearchTime.setHours(currentSearchTime.getHours() + 1);
-
-        const maxSearchTime = deadline && deadline < nextWeek ? deadline : nextWeek;
-
-        while (currentSearchTime < maxSearchTime) {
-            // Only schedule between 9 AM and 8 PM
-            if (currentSearchTime.getHours() >= 9 && currentSearchTime.getHours() <= 19) {
-                const startMs = currentSearchTime.getTime();
-                const endMs = startMs + durationMs;
-                if (isSlotFree(startMs, endMs)) {
-                    // Mark as occupied for subsequent searches
-                    occupiedSlots.push({ start: startMs, end: endMs });
-                    occupiedSlots.sort((a, b) => a.start - b.start);
-                    return { start: new Date(startMs), end: new Date(endMs) };
-                }
-            }
-            // Move to next 30 minutes
-            currentSearchTime.setMinutes(currentSearchTime.getMinutes() + 30);
-        }
-        return null;
-    };
-
-    // Schedule Assignments (1 hour each)
-    assignments.forEach(assignment => {
-        if (assignment.status !== 'Done') {
-            const deadline = assignment.dueDate ? new Date(assignment.dueDate) : undefined;
-            const slot = findFreeSlot(60 * 60 * 1000, deadline);
-            if (slot) {
-                combined.push({
-                    id: `auto-assign-${assignment.id}`,
-                    title: `Work on: ${assignment.title}`,
-                    startDate: slot.start.toISOString(),
-                    endDate: slot.end.toISOString(),
-                    type: 'assignment',
-                    referenceId: assignment.id,
-                    color: 'bg-purple-400'
-                });
-            }
-        }
-    });
-
-    // Schedule Tasks
-    tasks.forEach(task => {
-        if (!task.completed) {
-            const deadline = task.dueDate ? new Date(task.dueDate) : undefined;
-            const durationMs = task.estimatedTime ? task.estimatedTime * 60 * 1000 : 60 * 60 * 1000; // Default 1 hour
-            const slot = findFreeSlot(durationMs, deadline);
-            if (slot) {
-                combined.push({
-                    id: `auto-task-${task.id}`,
-                    title: `Work on: ${task.title}`,
-                    startDate: slot.start.toISOString(),
-                    endDate: slot.end.toISOString(),
-                    type: 'task',
-                    referenceId: task.id,
-                    color: 'bg-blue-400'
-                });
-            }
-        }
-    });
-
-    return combined;
+    return computeSchedule(events, tasks, assignments, routines, currentDate, viewType);
   }, [events, tasks, assignments, routines, currentDate, viewType]);
 
   const daysInMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).getDate();
@@ -277,15 +107,18 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tasks, assignments,
     const days = [];
     // Padding
     for (let i = 0; i < firstDayOfMonth; i++) {
-      days.push(<div key={`pad-${i}`} className="h-24 bg-slate-50/50 dark:bg-white/5 border border-slate-100 dark:border-white/5" />);
+      days.push(<div key={`pad-${i}`} className="min-h-[80px] h-full bg-slate-50/50 dark:bg-white/5 border border-slate-100 dark:border-white/5" />);
     }
 
     // Days
     for (let d = 1; d <= daysInMonth; d++) {
       const date = new Date(currentDate.getFullYear(), currentDate.getMonth(), d);
       const dayEvents = allEvents.filter(e => {
-          const eDate = new Date(e.startDate);
-          return eDate.getDate() === d && eDate.getMonth() === currentDate.getMonth() && eDate.getFullYear() === currentDate.getFullYear();
+          const eStart = new Date(e.startDate);
+          const eEnd = new Date(e.endDate);
+          const dayStart = new Date(currentDate.getFullYear(), currentDate.getMonth(), d);
+          const dayEnd = new Date(currentDate.getFullYear(), currentDate.getMonth(), d, 23, 59, 59, 999);
+          return eStart <= dayEnd && eEnd > dayStart;
       });
 
       const isToday = new Date().toDateString() === date.toDateString();
@@ -295,12 +128,12 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tasks, assignments,
         <div 
             key={d} 
             onClick={() => handleDateClick(d)}
-            className={`h-24 border border-slate-100 dark:border-white/5 p-1 relative group cursor-pointer transition-colors hover:bg-slate-50 dark:hover:bg-white/5 ${isSelected ? 'bg-blue-50 dark:bg-blue-500/10 ring-1 ring-inset ring-blue-500' : ''}`}
+            className={`min-h-[80px] h-full border border-slate-100 dark:border-white/5 p-1 relative group cursor-pointer transition-colors hover:bg-slate-50 dark:hover:bg-white/5 flex flex-col ${isSelected ? 'bg-blue-50 dark:bg-blue-500/10 ring-1 ring-inset ring-blue-500 z-10' : ''}`}
         >
-            <div className={`text-xs font-semibold mb-1 w-6 h-6 flex items-center justify-center rounded-full ${isToday ? 'bg-blue-600 text-white' : 'text-slate-700 dark:text-white'}`}>
+            <div className={`text-xs font-semibold mb-1 w-6 h-6 flex items-center justify-center rounded-full flex-shrink-0 ${isToday ? 'bg-blue-600 text-white' : 'text-slate-700 dark:text-white'}`}>
                 {d}
             </div>
-            <div className="space-y-1 overflow-y-auto max-h-[calc(100%-24px)] custom-scrollbar">
+            <div className="space-y-1 overflow-y-auto flex-1 custom-scrollbar">
                 {dayEvents.map(event => (
                     <div key={event.id} className={`text-[10px] px-1.5 py-0.5 rounded truncate text-white ${event.color || 'bg-slate-500'} bg-opacity-90`}>
                         {event.title}
@@ -322,14 +155,14 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tasks, assignments,
     }
     return (
         <div className="flex-1 flex flex-col overflow-y-auto">
-            <div className="grid grid-cols-7 border-b border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/5">
+            <div className="grid grid-cols-7 border-b border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/5 flex-shrink-0">
                 {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
                     <div key={day} className="py-2 text-center text-xs font-semibold text-slate-500 dark:text-white/50 uppercase tracking-wider">
                         {day}
                     </div>
                 ))}
             </div>
-            <div className="grid grid-cols-7 auto-rows-fr">
+            <div className="flex-1 grid grid-cols-7 auto-rows-fr">
                 {days}
             </div>
         </div>
@@ -353,24 +186,25 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tasks, assignments,
       const hours = Array.from({ length: 24 }, (_, i) => i);
 
       return (
-          <div className="flex-1 flex flex-col overflow-hidden">
-              {/* Header */}
-              <div className="grid grid-cols-8 border-b border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/5 flex-shrink-0">
-                  <div className="py-2 text-center text-xs font-semibold text-slate-500 dark:text-white/50 border-r border-slate-200 dark:border-white/10">Time</div>
-                  {weekDays.map((d, i) => {
-                      const isToday = new Date().toDateString() === d.toDateString();
-                      return (
-                          <div key={i} className={`py-2 text-center border-r border-slate-200 dark:border-white/10 last:border-r-0 ${isToday ? 'bg-blue-50 dark:bg-blue-500/10' : ''}`}>
-                              <div className="text-xs font-semibold text-slate-500 dark:text-white/50 uppercase tracking-wider">{d.toLocaleDateString('en-US', { weekday: 'short' })}</div>
-                              <div className={`text-sm font-bold ${isToday ? 'text-blue-600 dark:text-blue-400' : 'text-slate-800 dark:text-white'}`}>{d.getDate()}</div>
-                          </div>
-                      );
-                  })}
-              </div>
-              
-              {/* Time Grid */}
+          <div className="flex-1 flex flex-col overflow-hidden bg-slate-50 dark:bg-black/20">
+              {/* Scroll Container */}
               <div className="flex-1 overflow-y-auto relative">
-                  <div className="grid grid-cols-8 min-h-[1440px]"> {/* 60px per hour */}
+                  {/* Sticky Header */}
+                  <div className="sticky top-0 z-30 grid grid-cols-8 border-b border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-[#1a1f2e] flex-shrink-0 shadow-sm">
+                      <div className="py-2 text-center text-xs font-semibold text-slate-500 dark:text-white/50 border-r border-slate-200 dark:border-white/10">Time</div>
+                      {weekDays.map((d, i) => {
+                          const isToday = new Date().toDateString() === d.toDateString();
+                          return (
+                              <div key={i} className={`py-2 text-center border-r border-slate-200 dark:border-white/10 last:border-r-0 ${isToday ? 'bg-blue-50 dark:bg-blue-500/10' : ''}`}>
+                                  <div className="text-xs font-semibold text-slate-500 dark:text-white/50 uppercase tracking-wider">{d.toLocaleDateString('en-US', { weekday: 'short' })}</div>
+                                  <div className={`text-sm font-bold ${isToday ? 'text-blue-600 dark:text-blue-400' : 'text-slate-800 dark:text-white'}`}>{d.getDate()}</div>
+                              </div>
+                          );
+                      })}
+                  </div>
+                  
+                  {/* Time Grid (Main Area) */}
+                  <div className="grid grid-cols-8 relative h-[1440px]">
                       {/* Time Column */}
                       <div className="border-r border-slate-200 dark:border-white/10 bg-slate-50/50 dark:bg-white/5">
                           {hours.map(h => (
@@ -382,46 +216,82 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tasks, assignments,
 
                       {/* Days Columns */}
                       {weekDays.map((dayDate, dayIndex) => {
+                          const dayStart = new Date(dayDate);
+                          dayStart.setHours(0, 0, 0, 0);
+                          const dayEnd = new Date(dayDate);
+                          dayEnd.setHours(23, 59, 59, 999);
+
                           const dayEvents = allEvents.filter(e => {
-                              const eDate = new Date(e.startDate);
-                              return eDate.toDateString() === dayDate.toDateString();
+                              const eStart = new Date(e.startDate);
+                              const eEnd = new Date(e.endDate);
+                              // We include the event in this column if it overlaps the current day
+                              return eStart <= dayEnd && eEnd > dayStart;
                           });
 
                           return (
                               <div key={dayIndex} className="relative border-r border-slate-200 dark:border-white/10 last:border-r-0">
                                   {/* Grid Lines */}
                                   {hours.map(h => (
-                                      <div key={h} className="h-[60px] border-b border-slate-200 dark:border-white/10" />
+                                      <div key={h} className="h-[60px] border-b border-slate-200 dark:border-white/10 pointer-events-none" />
                                   ))}
 
                                   {/* Events */}
-                                  {dayEvents.map(event => {
-                                      const start = new Date(event.startDate);
-                                      const end = new Date(event.endDate);
-                                      const startMinutes = start.getHours() * 60 + start.getMinutes();
-                                      const endMinutes = end.getHours() * 60 + end.getMinutes();
-                                      const duration = Math.max(30, endMinutes - startMinutes); // Min 30 mins height
-                                      
-                                      return (
-                                          <div
-                                              key={event.id}
-                                              className={`absolute left-1 right-1 rounded p-1 text-[10px] text-white overflow-hidden shadow-sm hover:z-10 hover:shadow-md transition-all cursor-pointer ${event.color || 'bg-slate-500'}`}
-                                              style={{
-                                                  top: `${startMinutes}px`,
-                                                  height: `${duration}px`,
-                                                  opacity: 0.9
-                                              }}
-                                              onClick={(e) => {
-                                                  e.stopPropagation();
-                                                  setSelectedDate(dayDate);
-                                              }}
-                                              title={`${event.title} (${start.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})})`}
-                                          >
-                                              <div className="font-semibold truncate">{event.title}</div>
-                                              <div className="truncate opacity-80">{start.toLocaleTimeString([], {hour:'numeric', minute:'2-digit'})}</div>
-                                          </div>
-                                      );
-                                  })}
+                                  {(() => {
+                                      const mapped = dayEvents.map(event => {
+                                          const start = new Date(event.startDate);
+                                          const end = new Date(event.endDate);
+                                          
+                                          const viewStart = start < dayStart ? dayStart : start;
+                                          const viewEnd = end > dayEnd ? dayEnd : end;
+
+                                          const startMinutes = viewStart.getHours() * 60 + viewStart.getMinutes();
+                                          let durationMinutes = (viewEnd.getTime() - viewStart.getTime()) / (1000 * 60);
+                                          const duration = durationMinutes; // exact duration
+                                          const endMinutes = startMinutes + duration;
+                                          
+                                          return { event, start, startMinutes, duration, endMinutes };
+                                      }).sort((a, b) => a.startMinutes - b.startMinutes);
+
+                                      const columns: typeof mapped[] = [];
+                                      mapped.forEach(evt => {
+                                          let placed = false;
+                                          for (const col of columns) {
+                                              if (!col.some(e => Math.max(evt.startMinutes, e.startMinutes) < Math.min(evt.endMinutes, e.endMinutes))) {
+                                                  col.push(evt);
+                                                  placed = true;
+                                                  break;
+                                              }
+                                          }
+                                          if (!placed) columns.push([evt]);
+                                      });
+
+                                      return mapped.map(evt => {
+                                          const colIndex = columns.findIndex(col => col.includes(evt));
+                                          const numCols = columns.length;
+                                          
+                                          return (
+                                              <div
+                                                  key={evt.event.id}
+                                                  className={`absolute rounded px-1.5 py-0.5 text-[10px] text-white overflow-hidden shadow-sm hover:z-[20] hover:shadow-md transition-all cursor-pointer border border-black/10 dark:border-white/10 flex flex-col justify-start ${evt.event.color || 'bg-slate-500'}`}
+                                                  style={{
+                                                      top: `${evt.startMinutes + 1}px`,
+                                                      height: `${Math.max(evt.duration - 2, 12)}px`,
+                                                      left: `calc(${colIndex * (100 / numCols)}% + 2px)`,
+                                                      width: `calc(${100 / numCols}% - 4px)`,
+                                                      opacity: 0.95
+                                                  }}
+                                                  onClick={(e) => {
+                                                      e.stopPropagation();
+                                                      setSelectedDate(dayDate);
+                                                  }}
+                                                  title={`${evt.event.title} (${evt.start.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})})`}
+                                              >
+                                                  <div className="font-semibold truncate leading-none mt-0.5">{evt.event.title}</div>
+                                                  {evt.duration >= 30 && <div className="truncate opacity-80 leading-tight mt-0.5">{evt.start.toLocaleTimeString([], {hour:'numeric', minute:'2-digit'})}</div>}
+                                              </div>
+                                          );
+                                      });
+                                  })()}
                               </div>
                           );
                       })}
@@ -430,13 +300,14 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tasks, assignments,
                   {/* Current Time Indicator */}
                   {weekDays.some(d => d.toDateString() === new Date().toDateString()) && (
                       <div 
-                          className="absolute left-0 right-0 border-t-2 border-red-500 z-20 pointer-events-none flex items-center"
+                          className="absolute right-0 border-t-2 border-red-500 z-20 pointer-events-none flex items-center"
                           style={{ 
-                              top: `${new Date().getHours() * 60 + new Date().getMinutes()}px`,
-                              left: `${(new Date().getDay() + 1) * (100/8)}%` // Approximate position
+                              top: `${((new Date().getHours() * 60 + new Date().getMinutes()) / 60) * 60}px`,
+                              left: `${(weekDays.findIndex(d => d.toDateString() === new Date().toDateString()) + 1) * (100/8)}%`,
+                              width: `${100/8}%`
                            }}
                       >
-                          <div className="w-2 h-2 rounded-full bg-red-500 -ml-1"></div>
+                          <div className="w-2 h-2 rounded-full bg-red-500 -mt-[5px] -ml-[4px]"></div>
                       </div>
                   )}
               </div>
@@ -445,54 +316,17 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tasks, assignments,
   };
 
   const selectedDayEvents = selectedDate ? allEvents.filter(e => {
-      const eDate = new Date(e.startDate);
-      return eDate.toDateString() === selectedDate.toDateString();
+      const eStart = new Date(e.startDate);
+      const eEnd = new Date(e.endDate);
+      const dayStart = new Date(selectedDate);
+      dayStart.setHours(0, 0, 0, 0);
+      const dayEnd = new Date(selectedDate);
+      dayEnd.setHours(23, 59, 59, 999);
+      return eStart <= dayEnd && eEnd > dayStart;
   }) : [];
 
   return (
-    <div className="h-full flex flex-col bg-white dark:bg-[#1c1c1e] rounded-xl shadow-sm border border-slate-200 dark:border-white/10 overflow-hidden">
-        {/* Header */}
-        <div className="p-4 border-b border-slate-200 dark:border-white/10 flex items-center justify-between bg-slate-50 dark:bg-black/20">
-            <div className="flex items-center gap-4">
-                <h2 className="text-xl font-bold text-slate-800 dark:text-white min-w-[200px]">
-                    {viewType === 'month' 
-                        ? currentDate.toLocaleString('default', { month: 'long', year: 'numeric' })
-                        : `Week of ${currentDate.toLocaleString('default', { month: 'short', day: 'numeric' })}`
-                    }
-                </h2>
-                <div className="flex items-center bg-white dark:bg-white/10 rounded-lg border border-slate-200 dark:border-white/10">
-                    <button onClick={handlePrev} className="p-1.5 hover:bg-slate-100 dark:hover:bg-white/10 rounded-l-lg text-slate-600 dark:text-white"><ChevronLeft className="w-4 h-4" /></button>
-                    <div className="w-px h-4 bg-slate-200 dark:bg-white/10"></div>
-                    <button onClick={handleNext} className="p-1.5 hover:bg-slate-100 dark:hover:bg-white/10 rounded-r-lg text-slate-600 dark:text-white"><ChevronRight className="w-4 h-4" /></button>
-                </div>
-                <div className="flex bg-slate-200 dark:bg-black/40 p-1 rounded-lg">
-                    <button 
-                        onClick={() => handleSetViewType('month')}
-                        className={`px-3 py-1 rounded-md text-xs font-medium transition-all ${viewType === 'month' ? 'bg-white dark:bg-white/20 text-slate-900 dark:text-white shadow-sm' : 'text-slate-500 dark:text-white/40 hover:text-slate-900 dark:hover:text-white'}`}
-                    >
-                        Month
-                    </button>
-                    <button 
-                        onClick={() => handleSetViewType('week')}
-                        className={`px-3 py-1 rounded-md text-xs font-medium transition-all ${viewType === 'week' ? 'bg-white dark:bg-white/20 text-slate-900 dark:text-white shadow-sm' : 'text-slate-500 dark:text-white/40 hover:text-slate-900 dark:hover:text-white'}`}
-                    >
-                        Week
-                    </button>
-                </div>
-            </div>
-            <button 
-                onClick={() => {
-                    const now = new Date();
-                    setSelectedDate(now);
-                    setNewEventStart(now.toISOString().slice(0, 16));
-                    setIsAddEventOpen(true);
-                }}
-                className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-medium transition-colors shadow-sm"
-            >
-                <Plus className="w-4 h-4" /> Add Event
-            </button>
-        </div>
-
+    <div className="h-full flex flex-col bg-slate-50 dark:bg-black/20 overflow-hidden">
         <div className="flex flex-1 overflow-hidden">
             {/* Calendar Grid */}
             {viewType === 'month' ? renderMonthView() : renderWeekView()}
@@ -647,6 +481,6 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tasks, assignments,
         )}
     </div>
   );
-};
+});
 
 export default CalendarView;

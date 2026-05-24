@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Task, Assignment, Routine, LogEntry } from '../types';
-import { Calendar, Clock, CheckCircle2, Circle, Repeat, Plus, MessageSquare, ChevronRight, Upload, Trash2, Eye, EyeOff } from 'lucide-react';
+import { Calendar, Clock, CheckCircle2, Circle, Repeat, Plus, MessageSquare, ChevronRight, Upload, Trash2, Eye, EyeOff, Edit2 } from 'lucide-react';
 import Visualizer from './Visualizer';
 
 interface ManagingDashboardProps {
@@ -9,8 +9,11 @@ interface ManagingDashboardProps {
   routines: Routine[];
   logs: LogEntry[];
   onAddRoutine: (routine: Routine) => void;
+  onEditTask: (taskId: string, updates: Partial<Task>) => void;
   onDeleteTask: (taskId: string) => void;
+  onEditAssignment: (assignmentId: string, updates: Partial<Assignment>) => void;
   onDeleteAssignment: (assignmentId: string) => void;
+  onEditRoutine: (routineId: string, updates: Partial<Routine>) => void;
   onDeleteRoutine: (routineId: string) => void;
   onToggleRoutineCalendar: (routineId: string) => void;
   onSendText: (text: string) => void;
@@ -26,8 +29,11 @@ const ManagingDashboard: React.FC<ManagingDashboardProps> = ({
   routines,
   logs,
   onAddRoutine,
+  onEditTask,
   onDeleteTask,
+  onEditAssignment,
   onDeleteAssignment,
+  onEditRoutine,
   onDeleteRoutine,
   onToggleRoutineCalendar,
   onSendText,
@@ -38,6 +44,7 @@ const ManagingDashboard: React.FC<ManagingDashboardProps> = ({
 }) => {
   const [isAddRoutineOpen, setIsAddRoutineOpen] = useState(false);
   const [newRoutine, setNewRoutine] = useState<Partial<Routine>>({ frequency: 'Daily' });
+  const [editingRoutineId, setEditingRoutineId] = useState<string | null>(null);
   const [inputText, setInputText] = useState('');
   const logsEndRef = useRef<HTMLDivElement>(null);
 
@@ -55,18 +62,36 @@ const ManagingDashboard: React.FC<ManagingDashboardProps> = ({
     e.preventDefault();
     if (!newRoutine.title || !newRoutine.frequency || !newRoutine.startTime || !newRoutine.endTime) return;
     
-    onAddRoutine({
-      id: Math.random().toString(36).substring(2, 9),
-      title: newRoutine.title,
-      frequency: newRoutine.frequency as 'Daily' | 'Weekly' | 'Monthly',
-      startTime: newRoutine.startTime,
-      endTime: newRoutine.endTime,
-      daysOfWeek: newRoutine.daysOfWeek,
-      createdAt: new Date().toISOString()
-    });
+    if (editingRoutineId) {
+        onEditRoutine(editingRoutineId, {
+          title: newRoutine.title,
+          frequency: newRoutine.frequency as 'Daily' | 'Weekly' | 'Monthly',
+          startTime: newRoutine.startTime,
+          endTime: newRoutine.endTime,
+          daysOfWeek: newRoutine.frequency === 'Weekly' ? (newRoutine.daysOfWeek || [1]) : undefined
+        });
+    } else {
+        onAddRoutine({
+          id: Math.random().toString(36).substring(2, 9),
+          title: newRoutine.title,
+          frequency: newRoutine.frequency as 'Daily' | 'Weekly' | 'Monthly',
+          startTime: newRoutine.startTime,
+          endTime: newRoutine.endTime,
+          daysOfWeek: newRoutine.frequency === 'Weekly' ? (newRoutine.daysOfWeek || [1]) : undefined,
+          showInCalendar: true,
+          createdAt: new Date().toISOString()
+        });
+    }
     
+    setEditingRoutineId(null);
     setNewRoutine({ frequency: 'Daily' });
     setIsAddRoutineOpen(false);
+  };
+
+  const handleEditRoutineClick = (r: Routine) => {
+      setEditingRoutineId(r.id);
+      setNewRoutine(r);
+      setIsAddRoutineOpen(true);
   };
 
   return (
@@ -79,7 +104,11 @@ const ManagingDashboard: React.FC<ManagingDashboardProps> = ({
             Schedule Manager
           </h2>
           <button
-            onClick={() => setIsAddRoutineOpen(true)}
+            onClick={() => {
+                setEditingRoutineId(null);
+                setNewRoutine({ frequency: 'Daily' });
+                setIsAddRoutineOpen(true);
+            }}
             className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-500 transition-colors text-sm font-medium"
           >
             <Plus className="w-4 h-4" />
@@ -135,11 +164,23 @@ const ManagingDashboard: React.FC<ManagingDashboardProps> = ({
                       {routine.title}
                     </h4>
                     <div className="text-xs text-slate-500 dark:text-white/50 mt-1 flex items-center gap-2">
-                      <span className="px-1.5 py-0.5 bg-slate-100 dark:bg-white/10 rounded-md">{routine.frequency}</span>
+                      <span className="px-1.5 py-0.5 bg-slate-100 dark:bg-white/10 rounded-md">
+                        {routine.frequency}
+                        {routine.frequency === 'Weekly' && routine.daysOfWeek && (
+                          <span className="ml-1 opacity-75">({routine.daysOfWeek.map(d => ['Su', 'M', 'T', 'W', 'Th', 'F', 'Sa'][d]).join(', ')})</span>
+                        )}
+                      </span>
                       {(routine.startTime && routine.endTime) && <span>{routine.startTime} - {routine.endTime}</span>}
                     </div>
                   </div>
                   <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                    <button 
+                      onClick={() => handleEditRoutineClick(routine)}
+                      className="p-1.5 text-slate-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-500/10 rounded-md transition-all"
+                      title="Edit Routine"
+                    >
+                      <Edit2 className="w-4 h-4" />
+                    </button>
                     <button 
                       onClick={() => onToggleRoutineCalendar(routine.id)}
                       className="p-1.5 text-slate-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-500/10 rounded-md transition-all"
@@ -167,8 +208,15 @@ const ManagingDashboard: React.FC<ManagingDashboardProps> = ({
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white dark:bg-[#1c1c1e] rounded-2xl w-full max-w-md overflow-hidden shadow-2xl border border-slate-200 dark:border-white/10">
             <div className="p-4 border-b border-slate-100 dark:border-white/5 flex justify-between items-center">
-              <h3 className="font-semibold text-slate-800 dark:text-white">Add New Routine</h3>
-              <button onClick={() => setIsAddRoutineOpen(false)} className="text-slate-400 hover:text-slate-600 dark:hover:text-white transition-colors">
+              <h3 className="font-semibold text-slate-800 dark:text-white">{editingRoutineId ? 'Edit Routine' : 'Add New Routine'}</h3>
+              <button 
+                  onClick={() => {
+                      setIsAddRoutineOpen(false);
+                      setEditingRoutineId(null);
+                      setNewRoutine({ frequency: 'Daily' });
+                  }} 
+                  className="text-slate-400 hover:text-slate-600 dark:hover:text-white transition-colors"
+              >
                 <Plus className="w-5 h-5 rotate-45" />
               </button>
             </div>
@@ -218,6 +266,37 @@ const ManagingDashboard: React.FC<ManagingDashboardProps> = ({
                   />
                 </div>
               </div>
+              {newRoutine.frequency === 'Weekly' && (
+                <div>
+                  <label className="block text-xs font-medium text-slate-500 dark:text-white/50 mb-2">Select Days</label>
+                  <div className="flex gap-2">
+                    {[{ v: 1, l: 'M' }, { v: 2, l: 'T' }, { v: 3, l: 'W' }, { v: 4, l: 'T' }, { v: 5, l: 'F' }, { v: 6, l: 'S' }, { v: 0, l: 'S' }].map(day => (
+                      <button
+                        key={day.v}
+                        type="button"
+                        onClick={() => {
+                          const currentDays = newRoutine.daysOfWeek || [1]; // Default Mon
+                          if (currentDays.includes(day.v)) {
+                            // Don't remove if it's the last selected day
+                            if (currentDays.length > 1) {
+                              setNewRoutine({ ...newRoutine, daysOfWeek: currentDays.filter(d => d !== day.v) });
+                            }
+                          } else {
+                            setNewRoutine({ ...newRoutine, daysOfWeek: [...currentDays, day.v] });
+                          }
+                        }}
+                        className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold transition-colors ${
+                          (newRoutine.daysOfWeek || [1]).includes(day.v)
+                            ? 'bg-blue-600 text-white'
+                            : 'bg-slate-100 dark:bg-white/10 text-slate-600 dark:text-white/70 hover:bg-slate-200 dark:hover:bg-white/20'
+                        }`}
+                      >
+                        {day.l}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
               <div className="pt-4 flex justify-end gap-2">
                 <button
                   type="button"

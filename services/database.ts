@@ -263,14 +263,25 @@ let saveDebounce: any = null;
 async function getBundle(username: string) {
   if (!supabase) return { _type: 'bundle' };
   if (bundleCache) return bundleCache;
-  const { data } = await supabase.from('app_data').select('projects').eq('username', username).single();
-  let b = { _type: 'bundle' } as any;
-  if (data?.projects) {
-     if (data.projects._type === 'bundle') b = { ...data.projects };
-     else b = { _type: 'bundle', projects: data.projects };
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  try {
+    const { data } = await supabase.from('app_data').select('projects').eq('username', username).single().abortSignal(controller.signal);
+    clearTimeout(timeout);
+    let b = { _type: 'bundle' } as any;
+    if (data?.projects) {
+       if (data.projects._type === 'bundle') b = { ...data.projects };
+       else b = { _type: 'bundle', projects: data.projects };
+    }
+    bundleCache = b;
+    return b;
+  } catch (e) {
+    clearTimeout(timeout);
+    // Return empty bundle on timeout to avoid hanging the app
+    const b = { _type: 'bundle' } as any;
+    bundleCache = b;
+    return b;
   }
-  bundleCache = b;
-  return b;
 }
 
 function queueSave(username: string) {
@@ -278,7 +289,9 @@ function queueSave(username: string) {
   clearTimeout(saveDebounce);
   saveDebounce = setTimeout(async () => {
     try {
-      await supabase.from('app_data').update({ projects: bundleCache }).eq('username', username);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 8000);
+      await supabase.from('app_data').update({ projects: bundleCache }).eq('username', username).abortSignal(controller.signal).finally(() => clearTimeout(timeout));
     } catch (e) {}
   }, 300);
 }
@@ -287,38 +300,67 @@ export const SupabaseDB: Database = {
   
   async userExists(username: string): Promise<boolean> {
     if (!supabase) return false;
-    const { count, error } = await supabase
-      .from('app_data')
-      .select('*', { count: 'exact', head: true })
-      .eq('username', username);
-      
-    if (error) {
-        console.warn("Supabase check error", error);
-        return false;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    try {
+      const { count, error } = await supabase
+        .from('app_data')
+        .select('*', { count: 'exact', head: true })
+        .eq('username', username)
+        .abortSignal(controller.signal);
+        
+      clearTimeout(timeout);
+      if (error) {
+          console.warn("Supabase check error", error);
+          return false;
+      }
+      return (count || 0) > 0;
+    } catch (e: any) {
+      clearTimeout(timeout);
+      if (e.name === 'AbortError') throw new Error("Network timeout: Could not verify user.");
+      return false;
     }
-    return (count || 0) > 0;
   },
 
   async createUser(username: string, passwordHash: string): Promise<boolean> {
     if (!supabase) return false;
-    const { error } = await supabase.from('app_data').insert({
-        username,
-        password_hash: passwordHash,
-        projects: { _type: 'bundle', projects: [] },
-        daily_stats: { date: new Date().toDateString(), count: 0 }
-    });
-    if (error) console.error(error);
-    return !error;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    try {
+      const { error } = await supabase.from('app_data').insert({
+          username,
+          password_hash: passwordHash,
+          projects: { _type: 'bundle', projects: [] },
+          daily_stats: { date: new Date().toDateString(), count: 0 }
+      }).abortSignal(controller.signal);
+      
+      clearTimeout(timeout);
+      if (error) console.error(error);
+      return !error;
+    } catch (e: any) {
+      clearTimeout(timeout);
+      if (e.name === 'AbortError') throw new Error("Network timeout: Could not create user.");
+      return false;
+    }
   },
 
   async verifyUser(username: string, passwordHash: string): Promise<boolean> {
     if (!supabase) return false;
-    const { data } = await supabase.from('app_data').select('password_hash').eq('username', username).single();
-    if (data?.password_hash === passwordHash) {
-        bundleCache = null; // Clear cache on login
-        return true;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    try {
+      const { data } = await supabase.from('app_data').select('password_hash').eq('username', username).single().abortSignal(controller.signal);
+      clearTimeout(timeout);
+      if (data?.password_hash === passwordHash) {
+          bundleCache = null; // Clear cache on login
+          return true;
+      }
+      return false;
+    } catch (e: any) {
+      clearTimeout(timeout);
+      if (e.name === 'AbortError') throw new Error("Network timeout: Could not verify login.");
+      return false;
     }
-    return false;
   },
 
   async getProjects(username: string): Promise<Project[]> {
@@ -390,15 +432,25 @@ export const SupabaseDB: Database = {
 
   async getDailyStats(username: string): Promise<number> {
     if (!supabase) return 0;
-    const today = new Date().toDateString();
-    const { data } = await supabase.from('app_data').select('daily_stats').eq('username', username).single();
-    
-    if (data?.daily_stats?.date === today) {
-        return data.daily_stats.count;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    try {
+      const today = new Date().toDateString();
+      const { data } = await supabase.from('app_data').select('daily_stats').eq('username', username).single().abortSignal(controller.signal);
+      
+      clearTimeout(timeout);
+      if (data?.daily_stats?.date === today) {
+          return data.daily_stats.count;
+      }
+      // Reset if day changed
+      const updateController = new AbortController();
+      const updateTimeout = setTimeout(() => updateController.abort(), 8000);
+      supabase.from('app_data').update({ daily_stats: { date: today, count: 0 } }).eq('username', username).abortSignal(updateController.signal).finally(() => clearTimeout(updateTimeout));
+      return 0;
+    } catch (e) {
+      clearTimeout(timeout);
+      return 0;
     }
-    // Reset if day changed
-    await supabase.from('app_data').update({ daily_stats: { date: today, count: 0 } }).eq('username', username);
-    return 0;
   },
 
   async incrementDailyStats(username: string): Promise<number> {
@@ -408,7 +460,12 @@ export const SupabaseDB: Database = {
     const newVal = current + 1;
     const today = new Date().toDateString();
     
-    await supabase.from('app_data').update({ daily_stats: { date: today, count: newVal } }).eq('username', username);
+    try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 8000);
+        supabase.from('app_data').update({ daily_stats: { date: today, count: newVal } }).eq('username', username).abortSignal(controller.signal).finally(() => clearTimeout(timeout));
+    } catch (e) {}
+    
     return newVal;
   },
   
@@ -436,4 +493,4 @@ export const SupabaseDB: Database = {
 // ------------------------------------------------------------------
 // EXPORT THE ACTIVE DATABASE
 // ------------------------------------------------------------------
-export const db = SupabaseDB; // switched to Supabase
+export const db = LocalStorageDB;

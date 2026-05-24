@@ -7,7 +7,7 @@ interface TodoListProps {
   onAddTask: (task: Task) => void;
   onToggleTask: (taskId: string) => void;
   onDeleteTask: (taskId: string) => void;
-  onEditTask: (taskId: string, newTitle: string) => void;
+  onEditTask: (taskId: string, updates: Partial<Task>) => void;
   onAddSubtask: (parentId: string, subtaskTitle: string) => void;
   onToggleSubtask: (parentId: string, subtaskId: string) => void;
   onDeleteSubtask: (parentId: string, subtaskId: string) => void;
@@ -320,6 +320,7 @@ const TodoList: React.FC<TodoListProps> = ({
   // Edit State
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState('');
+  const [editHours, setEditHours] = useState('');
 
   // Subtask Adding State (Inline)
   const [addingSubtaskTo, setAddingSubtaskTo] = useState<string | null>(null);
@@ -452,11 +453,15 @@ const TodoList: React.FC<TodoListProps> = ({
   const startEditing = (task: Task) => {
     setEditingTaskId(task.id);
     setEditTitle(task.title);
+    setEditHours(task.estimatedHours?.toString() || '');
   };
 
   const saveEdit = () => {
     if (editingTaskId && editTitle.trim()) {
-      onEditTask(editingTaskId, editTitle.trim());
+      onEditTask(editingTaskId, {
+          title: editTitle.trim(),
+          estimatedHours: editHours ? parseFloat(editHours) : undefined
+      });
     }
     cancelEdit();
   };
@@ -464,6 +469,7 @@ const TodoList: React.FC<TodoListProps> = ({
   const cancelEdit = () => {
     setEditingTaskId(null);
     setEditTitle('');
+    setEditHours('');
   };
 
   const toggleExpand = (taskId: string) => {
@@ -556,18 +562,32 @@ const TodoList: React.FC<TodoListProps> = ({
 
                 <div className="flex-1 min-w-0">
                     {isEditing ? (
-                        <input 
-                            type="text" 
-                            value={editTitle}
-                            onChange={(e) => setEditTitle(e.target.value)}
-                            onBlur={saveEdit}
-                            onKeyDown={(e) => {
-                                if (e.key === 'Enter') saveEdit();
-                                if (e.key === 'Escape') cancelEdit();
-                            }}
-                            autoFocus
-                            className="w-full bg-transparent border-none p-0 text-sm text-slate-800 dark:text-white focus:ring-0 leading-tight"
-                        />
+                        <div className="flex flex-col gap-2">
+                            <input 
+                                type="text" 
+                                value={editTitle}
+                                onChange={(e) => setEditTitle(e.target.value)}
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter') saveEdit();
+                                    if (e.key === 'Escape') cancelEdit();
+                                }}
+                                autoFocus
+                                placeholder="Task title"
+                                className="w-full bg-slate-50 dark:bg-black/20 border border-slate-200 dark:border-white/10 rounded px-2 py-1 text-sm text-slate-800 dark:text-white"
+                            />
+                            <div className="flex gap-2">
+                                <input 
+                                    type="number"
+                                    step="0.5"
+                                    value={editHours}
+                                    onChange={(e) => setEditHours(e.target.value)}
+                                    placeholder="Hours (e.g. 1.5)"
+                                    className="w-32 bg-slate-50 dark:bg-black/20 border border-slate-200 dark:border-white/10 rounded px-2 py-1 text-xs text-slate-800 dark:text-white"
+                                />
+                                <button onClick={saveEdit} className="px-2 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-500">Save</button>
+                                <button onClick={cancelEdit} className="px-2 py-1 bg-slate-200 dark:bg-white/10 text-slate-700 dark:text-white/70 text-xs rounded hover:bg-slate-300 dark:hover:bg-white/20">Cancel</button>
+                            </div>
+                        </div>
                     ) : (
                         <div className="flex flex-col gap-0.5">
                             <span 
@@ -593,6 +613,11 @@ const TodoList: React.FC<TodoListProps> = ({
                                         {task.estimatedTime && (
                                             <span className="text-[10px] text-slate-500 dark:text-white/40 bg-slate-100 dark:bg-white/5 px-1.5 rounded flex items-center gap-1">
                                                 <Clock className="w-3 h-3" /> {task.estimatedTime}m
+                                            </span>
+                                        )}
+                                        {task.estimatedHours && (
+                                            <span className="text-[10px] text-slate-500 dark:text-white/40 bg-slate-100 dark:bg-white/5 px-1.5 rounded flex items-center gap-1">
+                                                <Clock className="w-3 h-3" /> {task.estimatedHours}h
                                             </span>
                                         )}
                                     </div>

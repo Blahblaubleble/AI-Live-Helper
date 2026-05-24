@@ -10,17 +10,20 @@ export interface ToolExecutors {
   switchProject: (name: string) => string;
   addTask: (title: string, priority: string) => string;
   addSubtask: (parentTitle: string, subtaskTitle: string) => string;
-  editTask: (originalTitle: string, newTitle?: string, newPriority?: string, newDueDate?: string) => string;
+  editTask: (originalTitle: string, newTitle?: string, newPriority?: string, newDueDate?: string, newEstimatedHours?: number) => string;
   markTaskComplete: (title: string) => string;
   getTasks: () => string;
   addAssignment: (subject: string, title: string, dueDate?: string, details?: string, priority?: string) => string;
+  editAssignment: (originalTitle: string, newTitle?: string, newSubject?: string, newDueDate?: string, newPriority?: string, newStatus?: string, newEstimatedHours?: number) => string;
   createNote: (subject: string, title: string, content: string) => string;
   getAssignments: () => string;
   getNotes: () => string;
   addCalendarEvent: (title: string, startDate: string, endDate?: string, description?: string, location?: string) => string;
   getCalendarEvents: () => string;
   addRoutine: (title: string, frequency: string, startTime: string, endTime: string, daysOfWeek?: number[]) => string;
+  editRoutine: (originalTitle: string, newTitle?: string, newFrequency?: string, newStartTime?: string, newEndTime?: string, newDaysOfWeek?: number[]) => string;
   getRoutines: () => string;
+  getSchedule: () => string;
   setViewMode: (mode: 'chat' | 'tasks' | 'school' | 'calendar' | 'managing') => string;
   deleteProject: (name: string) => string;
   deleteTask: (title: string) => string;
@@ -116,7 +119,8 @@ const TOOLS: FunctionDeclaration[] = [
             description: "The new priority level (Low, Medium, High) (optional).",
             enum: ["Low", "Medium", "High"]
         },
-        newDueDate: { type: Type.STRING, description: "The new due date (ISO 8601 format preferred). Use the current date context to calculate relative dates like 'tomorrow'." }
+        newDueDate: { type: Type.STRING, description: "The new due date (ISO 8601 format preferred). Use the current date context to calculate relative dates like 'tomorrow'." },
+        newEstimatedHours: { type: Type.NUMBER, description: "Estimated hours to complete (optional)." }
       },
       required: ["originalTitle"]
     }
@@ -176,6 +180,23 @@ const TOOLS: FunctionDeclaration[] = [
         status: { type: Type.STRING, enum: ["To Do", "In Progress", "Done"], description: "The new status" }
       },
       required: ["title", "status"]
+    }
+  },
+  {
+    name: "edit_assignment",
+    description: "Update an existing assignment's title, subject, due date, priority, status or estimated hours.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        originalTitle: { type: Type.STRING, description: "The original title to identify the assignment." },
+        newTitle: { type: Type.STRING, description: "The new title (optional)." },
+        newSubject: { type: Type.STRING, description: "The new subject (optional)." },
+        newDueDate: { type: Type.STRING, description: "The new due date (ISO 8601 format) (optional)." },
+        newPriority: { type: Type.STRING, enum: ["Low", "Medium", "High"], description: "The new priority (optional)." },
+        newStatus: { type: Type.STRING, enum: ["To Do", "In Progress", "Done"], description: "The new status (optional)." },
+        newEstimatedHours: { type: Type.NUMBER, description: "Estimated hours to complete (optional)." }
+      },
+      required: ["originalTitle"]
     }
   },
   {
@@ -276,6 +297,30 @@ const TOOLS: FunctionDeclaration[] = [
         daysOfWeek: { type: Type.ARRAY, items: { type: Type.NUMBER }, description: "Array of days (0-6, where 0 is Sunday) for Weekly routines (optional)" }
       },
       required: ["title", "frequency", "startTime", "endTime"]
+    }
+  },
+  {
+    name: "edit_routine",
+    description: "Update an existing routine's title, frequency, start time, end time, etc.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        originalTitle: { type: Type.STRING, description: "The original title to identify the routine" },
+        newTitle: { type: Type.STRING, description: "New title (optional)" },
+        newFrequency: { type: Type.STRING, enum: ["Daily", "Weekly", "Monthly"], description: "New frequency (optional)" },
+        newStartTime: { type: Type.STRING, description: "New start time HH:MM (optional)" },
+        newEndTime: { type: Type.STRING, description: "New end time HH:MM (optional)" },
+        newDaysOfWeek: { type: Type.ARRAY, description: "Array of integers 0-6 indicating days of week (optional)", items: { type: Type.INTEGER } }
+      },
+      required: ["originalTitle"]
+    }
+  },
+  {
+    name: "get_schedule",
+    description: "Get the unified computed schedule for the coming days, including auto-scheduled work sessions for assignments and tasks. Use this to give a brief on the schedule.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {},
     }
   },
   {
@@ -493,6 +538,10 @@ export class GeminiLiveService {
           Address the user as "Sir" (or "Ma'am").
           Be incredibly helpful but succinct.
 
+          TASK AND CALENDAR MANAGEMENT PROTOCOL:
+          You are responsible for making sure everything in the managing tab (tasks, assignments, routines) is sorted out and completed on time in the calendar. 
+          When requested or reporting, give a quick brief on the day and explain why you chose the schedule to be like this, including a vision for the future (how today's schedule helps long-term goals).
+
           CONFIRMATION PROTOCOL:
           After executing any tool (like adding a task or switching projects), you MUST explicitly confirm the action to the user verbaly.
           Example: "I have added 'Buy milk' to your list, Sir." or "Project 'Alpha' created."
@@ -579,13 +628,15 @@ export class GeminiLiveService {
               case 'add_subtask':
                   return this.callbacks.toolExecutors.addSubtask(args.parentTitle, args.subtaskTitle);
               case 'edit_task':
-                  return this.callbacks.toolExecutors.editTask(args.originalTitle, args.newTitle, args.newPriority, args.newDueDate);
+                  return this.callbacks.toolExecutors.editTask(args.originalTitle, args.newTitle, args.newPriority, args.newDueDate, args.newEstimatedHours);
               case 'mark_task_complete':
                   return this.callbacks.toolExecutors.markTaskComplete(args.title);
               case 'get_tasks':
                   return this.callbacks.toolExecutors.getTasks();
               case 'add_assignment':
                   return this.callbacks.toolExecutors.addAssignment(args.subject, args.title, args.dueDate, args.details, args.priority);
+              case 'edit_assignment':
+                  return this.callbacks.toolExecutors.editAssignment(args.originalTitle, args.newTitle, args.newSubject, args.newDueDate, args.newPriority, args.newStatus, args.newEstimatedHours);
               case 'create_note':
                   return this.callbacks.toolExecutors.createNote(args.subject, args.title, args.content);
               case 'get_assignments':
@@ -598,6 +649,10 @@ export class GeminiLiveService {
                   return this.callbacks.toolExecutors.getCalendarEvents();
               case 'add_routine':
                   return this.callbacks.toolExecutors.addRoutine(args.title, args.frequency, args.startTime, args.endTime, args.daysOfWeek);
+              case 'edit_routine':
+                  return this.callbacks.toolExecutors.editRoutine(args.originalTitle, args.newTitle, args.newFrequency, args.newStartTime, args.newEndTime, args.newDaysOfWeek);
+              case 'get_schedule':
+                  return this.callbacks.toolExecutors.getSchedule();
               case 'get_routines':
                   return this.callbacks.toolExecutors.getRoutines();
               case 'set_view_mode':
@@ -900,6 +955,10 @@ export class GeminiLiveService {
 
           PERSONA:
           Your tone is formal, polite, British, and concise. Address the user as "Sir".
+
+          TASK AND CALENDAR MANAGEMENT PROTOCOL:
+          You are responsible for making sure everything in the managing tab (tasks, assignments, routines) is sorted out and completed on time in the calendar. 
+          When requested or reporting, give a quick brief on the day and explain why you chose the schedule to be like this, including a vision for the future (how today's schedule helps long-term goals).
 
           CONFIRMATION PROTOCOL:
           After executing any tool, you MUST explicitly confirm to the user that the task was completed successfully.

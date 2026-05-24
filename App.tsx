@@ -7,9 +7,10 @@ import TodoList from './components/TodoList';
 import SchoolDashboard from './components/SchoolDashboard';
 import CalendarView from './components/CalendarView';
 import ManagingDashboard from './components/ManagingDashboard';
+import { computeSchedule } from './utils/scheduler';
 import { db } from './services/database';
 import { ConnectionState, LogEntry, UsageStats, Project, User, Task, Assignment, SchoolNote, CalendarEvent, Routine } from './types';
-import { Play, Mic, MicOff, Monitor, ArrowRight, Video, VideoOff, Folder, Trash2, Zap, Plus, X, ListTodo, MessageSquare, Sun, Moon, LogOut, Download, Bot, Calendar as CalendarIcon } from 'lucide-react';
+import { Play, Mic, MicOff, Monitor, ArrowRight, Video, VideoOff, Folder, Trash2, Zap, Plus, X, ListTodo, MessageSquare, Sun, Moon, LogOut, Download, Bot, Calendar as CalendarIcon, ChevronLeft, ChevronRight } from 'lucide-react';
 
 const FREE_TIER_LIMITS = { TPM: 1000000, RPD: 1500 };
 
@@ -90,6 +91,40 @@ const App: React.FC = () => {
   const [viewMode, setViewMode] = useState<'chat' | 'tasks' | 'school' | 'calendar' | 'managing'>('chat');
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
+  
+  // Calendar View State
+  const calendarRef = useRef<any>(null);
+  const [calendarDate, setCalendarDate] = useState(new Date());
+  const [calendarViewType, setCalendarViewType] = useState<'month' | 'week'>(() => {
+    const saved = localStorage.getItem('calendarViewType');
+    return (saved === 'month' || saved === 'week') ? saved as 'month' | 'week' : 'month';
+  });
+
+  const handleCalendarPrev = () => {
+    if (calendarViewType === 'month') {
+        setCalendarDate(new Date(calendarDate.getFullYear(), calendarDate.getMonth() - 1, 1));
+    } else {
+        const newDate = new Date(calendarDate);
+        newDate.setDate(newDate.getDate() - 7);
+        setCalendarDate(newDate);
+    }
+  };
+
+  const handleCalendarNext = () => {
+    if (calendarViewType === 'month') {
+        setCalendarDate(new Date(calendarDate.getFullYear(), calendarDate.getMonth() + 1, 1));
+    } else {
+        const newDate = new Date(calendarDate);
+        newDate.setDate(newDate.getDate() + 7);
+        setCalendarDate(newDate);
+    }
+  };
+
+  const handleSetCalendarViewType = (type: 'month' | 'week') => {
+    setCalendarViewType(type);
+    localStorage.setItem('calendarViewType', type);
+  };
+  
   const newProjectInputRef = useRef<HTMLInputElement>(null);
   const [stats, setStats] = useState<UsageStats>({ imagesSent: 0, modelTurns: 0, estimatedTokens: 0, tokensPerMinute: 0 });
   const [dailyRequests, setDailyRequests] = useState(0);
@@ -107,6 +142,7 @@ const App: React.FC = () => {
   const calendarEventsRef = useRef<CalendarEvent[]>([]);
   const schoolNotesRef = useRef<SchoolNote[]>([]);
   const assignmentsRef = useRef<Assignment[]>([]);
+  const routinesRef = useRef<Routine[]>([]);
   const activeProjectIdRef = useRef<string | null>(null);
 
   // Sync refs
@@ -115,6 +151,7 @@ const App: React.FC = () => {
   useEffect(() => { calendarEventsRef.current = calendarEvents; }, [calendarEvents]);
   useEffect(() => { schoolNotesRef.current = schoolNotes; }, [schoolNotes]);
   useEffect(() => { assignmentsRef.current = assignments; }, [assignments]);
+  useEffect(() => { routinesRef.current = routines; }, [routines]);
   useEffect(() => { activeProjectIdRef.current = activeProjectId; }, [activeProjectId]);
 
   // Load Data
@@ -138,40 +175,26 @@ const App: React.FC = () => {
     loadData();
   }, [user]);
 
-  // Auto-save
+  // Auto-save logs when they change
   useEffect(() => {
-    if (!user || !isDataLoaded) return;
-    const syncAndSave = () => {
-        const currentProjects = projectsRef.current;
+    if (!user || !isDataLoaded || !activeProjectId) return;
+    
+    const timeoutId = setTimeout(() => {
         const currentLogs = logsRef.current;
-        const currentEvents = calendarEventsRef.current;
-        const currentNotes = schoolNotesRef.current;
-        const currentAssignments = assignmentsRef.current;
-
-        if (activeProjectId) {
-             setProjects(prevProjects => {
-                 const updatedProjects = prevProjects.map(p => {
-                    if (p.id === activeProjectId) {
-                        return { ...p, logs: currentLogs, lastActive: new Date().toISOString() };
-                    }
-                    return p;
-                });
-                db.saveProjects(user.username, updatedProjects).catch(err => console.error("Auto-save projects failed", err));
-                return updatedProjects;
-             });
-        }
-        
-        setCalendarEvents(prev => { db.saveCalendarEvents(user.username, prev); return prev; });
-        setSchoolNotes(prev => { db.saveSchoolNotes(user.username, prev); return prev; });
-        setAssignments(prev => { db.saveAssignments(user.username, prev); return prev; });
-        setRoutines(prev => { db.saveRoutines(user.username, prev); return prev; });
-    };
-    const intervalId = setInterval(syncAndSave, 2000);
-    return () => {
-        clearInterval(intervalId);
-        syncAndSave();
-    };
-  }, [activeProjectId, user, isDataLoaded]); 
+        setProjects(prevProjects => {
+            const updatedProjects = prevProjects.map(p => {
+               if (p.id === activeProjectId) {
+                   return { ...p, logs: currentLogs, lastActive: new Date().toISOString() };
+               }
+               return p;
+           });
+           db.saveProjects(user.username, updatedProjects).catch(err => console.error("Auto-save logs failed", err));
+           return updatedProjects;
+        });
+    }, 1000);
+    
+    return () => clearTimeout(timeoutId);
+  }, [logs, activeProjectId, user, isDataLoaded]); 
 
   // Initialize Service
   useEffect(() => {
@@ -309,7 +332,7 @@ const App: React.FC = () => {
             }
             return `Parent task '${parentTitle}' not found.`;
         },
-        editTask: (originalTitle, newTitle, newPriority, newDueDate) => {
+        editTask: (originalTitle, newTitle, newPriority, newDueDate, newEstimatedHours) => {
              if (!activeProjectIdRef.current) return "No active project.";
              const currentProject = projectsRef.current.find(p => p.id === activeProjectIdRef.current);
              if (!currentProject) return "Active project not found.";
@@ -342,6 +365,11 @@ const App: React.FC = () => {
                          updates.dueDate = date.toISOString();
                          msgParts.push(`due date set to ${date.toLocaleString()}`);
                      }
+                 }
+                 
+                 if (newEstimatedHours !== undefined) {
+                     updates.estimatedHours = newEstimatedHours;
+                     msgParts.push(`estimated hours set to ${newEstimatedHours}`);
                  }
                  
                  if (Object.keys(updates).length === 0) return "No changes requested for the task.";
@@ -415,9 +443,47 @@ const App: React.FC = () => {
                  details: details || '',
                  createdAt: new Date().toISOString()
              };
-             setAssignments(prev => [...prev, newAssignment]);
+             setAssignments(prev => {
+                 const updated = [...prev, newAssignment];
+                 if (user) db.saveAssignments(user.username, updated);
+                 return updated;
+             });
              setViewMode('school');
              return `Assignment '${title}' added to ${subject}.`;
+        },
+        editAssignment: (originalTitle, newTitle, newSubject, newDueDate, newPriority, newStatus, newEstimatedHours) => {
+             const assignment = assignmentsRef.current.find(a => a.title.toLowerCase().includes(originalTitle.toLowerCase().trim()));
+             if (assignment) {
+                 let updates: any = {};
+                 let msgParts = [];
+                 if (newTitle && newTitle.trim()) { updates.title = newTitle.trim(); msgParts.push(`renamed to '${newTitle}'`); }
+                 if (newSubject && newSubject.trim()) { updates.subject = newSubject.trim(); msgParts.push(`subject changed to '${newSubject}'`); }
+                 if (newDueDate) { 
+                     const date = new Date(newDueDate);
+                     if (!isNaN(date.getTime())) { updates.dueDate = date.toISOString(); msgParts.push(`due date set to ${date.toLocaleString()}`); }
+                 }
+                 if (newPriority) {
+                     const norm = newPriority.charAt(0).toUpperCase() + newPriority.slice(1).toLowerCase();
+                     if (['Low', 'Medium', 'High'].includes(norm)) { updates.priority = norm; msgParts.push(`priority set to ${norm}`); }
+                 }
+                 if (newStatus && ['To Do', 'In Progress', 'Done'].includes(newStatus)) {
+                     updates.status = newStatus; msgParts.push(`status set to ${newStatus}`);
+                 }
+                 if (newEstimatedHours !== undefined) {
+                     updates.estimatedHours = newEstimatedHours; msgParts.push(`estimated hours set to ${newEstimatedHours}`);
+                 }
+                 
+                 if (Object.keys(updates).length === 0) return "No changes requested for the assignment.";
+                 
+                 setAssignments(prev => {
+                     const updated = prev.map(a => a.id === assignment.id ? { ...a, ...updates } : a);
+                     if (user) db.saveAssignments(user.username, updated);
+                     return updated;
+                 });
+                 setViewMode('school');
+                 return `Assignment '${assignment.title}' updated: ${msgParts.join(', ')}.`;
+             }
+             return `Assignment '${originalTitle}' not found.`;
         },
         createNote: (subject, title, content) => {
              const newNote: SchoolNote = {
@@ -427,7 +493,11 @@ const App: React.FC = () => {
                  content,
                  createdAt: new Date().toISOString()
              };
-             setSchoolNotes(prev => [...prev, newNote]);
+             setSchoolNotes(prev => {
+                 const updated = [...prev, newNote];
+                 if (user) db.saveSchoolNotes(user.username, updated);
+                 return updated;
+             });
              setViewMode('school');
              return `Note '${title}' created for ${subject}.`;
         },
@@ -454,7 +524,11 @@ const App: React.FC = () => {
                  type: 'event',
                  color: 'bg-indigo-500'
              };
-             setCalendarEvents(prev => [...prev, newEvent]);
+             setCalendarEvents(prev => {
+                 const updated = [...prev, newEvent];
+                 if (user) db.saveCalendarEvents(user.username, updated);
+                 return updated;
+             });
              setViewMode('calendar');
              return `Event '${title}' added to calendar.`;
         },
@@ -483,10 +557,67 @@ const App: React.FC = () => {
             setViewMode('managing');
             return `Routine '${title}' added.`;
         },
+        editRoutine: (originalTitle, newTitle, newFrequency, newStartTime, newEndTime, newDaysOfWeek) => {
+             const routine = routinesRef.current.find(r => r.title.toLowerCase().includes(originalTitle.toLowerCase().trim()));
+             if (routine) {
+                 let updates: any = {};
+                 let msgParts = [];
+                 if (newTitle && newTitle.trim()) { updates.title = newTitle.trim(); msgParts.push(`renamed to '${newTitle}'`); }
+                 if (newFrequency && ['Daily', 'Weekly', 'Monthly'].includes(newFrequency)) { updates.frequency = newFrequency; msgParts.push(`frequency set to ${newFrequency}`); }
+                 if (newStartTime && newStartTime.trim()) { updates.startTime = newStartTime.trim(); msgParts.push(`start time set to ${newStartTime}`); }
+                 if (newEndTime && newEndTime.trim()) { updates.endTime = newEndTime.trim(); msgParts.push(`end time set to ${newEndTime}`); }
+                 if (newDaysOfWeek) { updates.daysOfWeek = newDaysOfWeek; msgParts.push(`days of week set`); }
+                 
+                 if (Object.keys(updates).length === 0) return "No changes requested for the routine.";
+                 
+                 setRoutines(prev => {
+                     const updated = prev.map(r => r.id === routine.id ? { ...r, ...updates } : r);
+                     if (user) db.saveRoutines(user.username, updated);
+                     return updated;
+                 });
+                 setViewMode('managing');
+                 return `Routine '${routine.title}' updated: ${msgParts.join(', ')}.`;
+             }
+             return `Routine '${originalTitle}' not found.`;
+        },
         getRoutines: () => {
-            if (routines.length === 0) return "No routines found.";
+            if (routinesRef.current.length === 0) return "No routines found.";
             setViewMode('managing');
-            return routines.map(r => `- ${r.title} (${r.frequency}${r.startTime && r.endTime ? ' from ' + r.startTime + ' to ' + r.endTime : ''})`).join('\n');
+            return routinesRef.current.map(r => `- ${r.title} (${r.frequency}${r.startTime && r.endTime ? ' from ' + r.startTime + ' to ' + r.endTime : ''})`).join('\n');
+        },
+        getSchedule: () => {
+            const events = computeSchedule(
+                calendarEventsRef.current,
+                projectsRef.current.flatMap(p => p.tasks || []),
+                assignmentsRef.current,
+                routinesRef.current,
+                new Date(),
+                'week'
+            );
+            if (events.length === 0) return "Schedule is completely free for the next 7 days.";
+            setViewMode('managing');
+            
+            // Sort events by start date
+            const sortedEvents = [...events].sort((a, b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime());
+            
+            // Group by day for readability
+            const groupedByDay: { [key: string]: CalendarEvent[] } = {};
+            sortedEvents.forEach(e => {
+                const dateKey = new Date(e.startDate).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+                if (!groupedByDay[dateKey]) groupedByDay[dateKey] = [];
+                groupedByDay[dateKey].push(e);
+            });
+            
+            let result = "Here is the computed schedule for the next 7 days:\n";
+            for (const [day, dayEvents] of Object.entries(groupedByDay)) {
+                result += `\n**${day}**:\n`;
+                dayEvents.forEach(e => {
+                    const startStr = new Date(e.startDate).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+                    const endStr = new Date(e.endDate).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+                    result += `- ${startStr} - ${endStr}: ${e.title} [Type: ${e.type}]\n`;
+                });
+            }
+            return result;
         },
         setViewMode: (mode) => {
             setViewMode(mode);
@@ -818,17 +949,37 @@ const App: React.FC = () => {
           return updated;
       });
   };
-  const handleEditTask = (taskId: string, newTitle: string) => {
-    if (!activeProjectId) return;
+  const handleEditTask = (taskId: string, updates: Partial<Task>) => {
     setProjects(prev => {
+        let changed = false;
         const updated = prev.map(p => {
-            if (p.id === activeProjectId) return { ...p, tasks: (p.tasks || []).map(t => t.id === taskId ? { ...t, title: newTitle } : t), lastActive: new Date().toISOString() };
+            if (p.tasks?.some(t => t.id === taskId)) {
+                changed = true;
+                return { ...p, tasks: p.tasks.map(t => t.id === taskId ? { ...t, ...updates } : t), lastActive: new Date().toISOString() };
+            }
             return p;
         });
-        if (user) db.saveProjects(user.username, updated);
+        if (changed && user) db.saveProjects(user.username, updated);
         return updated;
     });
   };
+
+  const handleEditAssignment = (assignmentId: string, updates: Partial<Assignment>) => {
+      setAssignments(prev => {
+          const updated = prev.map(a => a.id === assignmentId ? { ...a, ...updates } : a);
+          if (user) db.saveAssignments(user.username, updated);
+          return updated;
+      });
+  };
+
+  const handleEditRoutine = (routineId: string, updates: Partial<Routine>) => {
+      setRoutines(prev => {
+          const updated = prev.map(r => r.id === routineId ? { ...r, ...updates } : r);
+          if (user) db.saveRoutines(user.username, updated);
+          return updated;
+      });
+  };
+
   const handleDeleteTask = (taskId: string) => {
       if (!activeProjectId) return;
       setProjects(prev => {
@@ -1110,22 +1261,66 @@ const App: React.FC = () => {
                     <div className="h-14 border-b border-slate-200 dark:border-white/5 flex items-center justify-between px-6 bg-white/30 dark:bg-white/5 backdrop-blur-md">
                         <div className="flex items-center gap-3">
                             <h1 className="text-base font-semibold text-slate-800 dark:text-white tracking-wide">
-                                {activeProjectId ? activeProject?.name : "Dashboard"}
+                                {viewMode === 'calendar' 
+                                    ? calendarViewType === 'month' 
+                                        ? calendarDate.toLocaleString('default', { month: 'long', year: 'numeric' })
+                                        : `Week of ${calendarDate.toLocaleString('default', { month: 'short', day: 'numeric' })}`
+                                    : activeProjectId ? activeProject?.name : "Dashboard"}
                             </h1>
                             {connectionState !== ConnectionState.IDLE && (
                                 <div className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${connectionState === ConnectionState.CONNECTED ? 'border-green-500/30 text-green-600 dark:text-green-400 bg-green-500/10' : 'border-yellow-500/30 text-yellow-600 dark:text-yellow-400 bg-yellow-500/10'}`}>
                                     {connectionState === ConnectionState.CONNECTED ? 'LIVE' : 'CONNECTING...'}
                                 </div>
                             )}
+                            
+                            {viewMode === 'calendar' && (
+                                <div className="flex items-center gap-3 ml-4">
+                                    <div className="flex items-center bg-white dark:bg-white/10 rounded-lg border border-slate-200 dark:border-white/10 h-7 overflow-hidden">
+                                        <button onClick={handleCalendarPrev} className="px-2 h-full hover:bg-slate-100 dark:hover:bg-white/10 text-slate-600 dark:text-white transition-colors flex items-center justify-center">
+                                            <ChevronLeft className="w-4 h-4" />
+                                        </button>
+                                        <div className="w-px h-full bg-slate-200 dark:bg-white/10"></div>
+                                        <button onClick={handleCalendarNext} className="px-2 h-full hover:bg-slate-100 dark:hover:bg-white/10 text-slate-600 dark:text-white transition-colors flex items-center justify-center">
+                                            <ChevronRight className="w-4 h-4" />
+                                        </button>
+                                    </div>
+                                    <div className="flex bg-slate-200 dark:bg-black/40 p-0.5 rounded-lg h-7">
+                                        <button 
+                                            onClick={() => handleSetCalendarViewType('month')}
+                                            className={`px-3 h-full rounded-md text-xs font-medium transition-all flex items-center justify-center ${calendarViewType === 'month' ? 'bg-white dark:bg-white/20 text-slate-900 dark:text-white shadow-sm' : 'text-slate-500 dark:text-white/40 hover:text-slate-900 dark:hover:text-white'}`}
+                                        >
+                                            Month
+                                        </button>
+                                        <button 
+                                            onClick={() => handleSetCalendarViewType('week')}
+                                            className={`px-3 h-full rounded-md text-xs font-medium transition-all flex items-center justify-center ${calendarViewType === 'week' ? 'bg-white dark:bg-white/20 text-slate-900 dark:text-white shadow-sm' : 'text-slate-500 dark:text-white/40 hover:text-slate-900 dark:hover:text-white'}`}
+                                        >
+                                            Week
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
                         </div>
 
-                        {/* Tab Switcher */}
-                        <div className="bg-slate-200 dark:bg-black/40 p-1 rounded-lg flex gap-1">
-                            <button onClick={() => setViewMode('chat')} className={`px-3 py-1 rounded-md text-xs font-medium transition-all ${viewMode === 'chat' ? 'bg-white dark:bg-white/20 text-slate-900 dark:text-white shadow-sm' : 'text-slate-500 dark:text-white/40 hover:text-slate-900 dark:hover:text-white'}`}>Chat</button>
-                            <button onClick={() => setViewMode('tasks')} className={`px-3 py-1 rounded-md text-xs font-medium transition-all ${viewMode === 'tasks' ? 'bg-white dark:bg-white/20 text-slate-900 dark:text-white shadow-sm' : 'text-slate-500 dark:text-white/40 hover:text-slate-900 dark:hover:text-white'}`}>Tasks</button>
-                            <button onClick={() => setViewMode('school')} className={`px-3 py-1 rounded-md text-xs font-medium transition-all ${viewMode === 'school' ? 'bg-white dark:bg-white/20 text-slate-900 dark:text-white shadow-sm' : 'text-slate-500 dark:text-white/40 hover:text-slate-900 dark:hover:text-white'}`}>School</button>
-                            <button onClick={() => setViewMode('calendar')} className={`px-3 py-1 rounded-md text-xs font-medium transition-all ${viewMode === 'calendar' ? 'bg-white dark:bg-white/20 text-slate-900 dark:text-white shadow-sm' : 'text-slate-500 dark:text-white/40 hover:text-slate-900 dark:hover:text-white'}`}>Calendar</button>
-                            <button onClick={() => setViewMode('managing')} className={`px-3 py-1 rounded-md text-xs font-medium transition-all ${viewMode === 'managing' ? 'bg-white dark:bg-white/20 text-slate-900 dark:text-white shadow-sm' : 'text-slate-500 dark:text-white/40 hover:text-slate-900 dark:hover:text-white'}`}>Managing</button>
+                        <div className="flex items-center gap-4">
+                            {/* Calendar specific right-side actions */}
+                            {viewMode === 'calendar' && (
+                                <button 
+                                    onClick={() => calendarRef.current?.openAddEvent()}
+                                    className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-medium transition-colors shadow-sm"
+                                >
+                                    <Plus className="w-4 h-4" /> Add Event
+                                </button>
+                            )}
+
+                            {/* Tab Switcher */}
+                            <div className="bg-slate-200 dark:bg-black/40 p-1 rounded-lg flex gap-1">
+                                <button onClick={() => setViewMode('chat')} className={`px-3 py-1 rounded-md text-xs font-medium transition-all ${viewMode === 'chat' ? 'bg-white dark:bg-white/20 text-slate-900 dark:text-white shadow-sm' : 'text-slate-500 dark:text-white/40 hover:text-slate-900 dark:hover:text-white'}`}>Chat</button>
+                                <button onClick={() => setViewMode('tasks')} className={`px-3 py-1 rounded-md text-xs font-medium transition-all ${viewMode === 'tasks' ? 'bg-white dark:bg-white/20 text-slate-900 dark:text-white shadow-sm' : 'text-slate-500 dark:text-white/40 hover:text-slate-900 dark:hover:text-white'}`}>Tasks</button>
+                                <button onClick={() => setViewMode('school')} className={`px-3 py-1 rounded-md text-xs font-medium transition-all ${viewMode === 'school' ? 'bg-white dark:bg-white/20 text-slate-900 dark:text-white shadow-sm' : 'text-slate-500 dark:text-white/40 hover:text-slate-900 dark:hover:text-white'}`}>School</button>
+                                <button onClick={() => setViewMode('calendar')} className={`px-3 py-1 rounded-md text-xs font-medium transition-all ${viewMode === 'calendar' ? 'bg-white dark:bg-white/20 text-slate-900 dark:text-white shadow-sm' : 'text-slate-500 dark:text-white/40 hover:text-slate-900 dark:hover:text-white'}`}>Calendar</button>
+                                <button onClick={() => setViewMode('managing')} className={`px-3 py-1 rounded-md text-xs font-medium transition-all ${viewMode === 'managing' ? 'bg-white dark:bg-white/20 text-slate-900 dark:text-white shadow-sm' : 'text-slate-500 dark:text-white/40 hover:text-slate-900 dark:hover:text-white'}`}>Managing</button>
+                            </div>
                         </div>
                     </div>
 
@@ -1264,17 +1459,22 @@ const App: React.FC = () => {
                                         assignments={assignments}
                                         schoolNotes={schoolNotes}
                                         onAddAssignment={handleAddAssignment}
+                                        onEditAssignment={handleEditAssignment}
                                         onAddNote={handleAddNote}
                                     />
                                 </div>
                             ) : viewMode === 'calendar' ? (
-                                <div className="flex-1 overflow-hidden p-6">
+                                <div className="flex-1 overflow-hidden">
                                     <CalendarView 
+                                        ref={calendarRef}
                                         events={calendarEvents}
                                         tasks={projects.flatMap(p => p.tasks || [])}
                                         assignments={assignments}
                                         routines={routines}
                                         onAddEvent={handleAddEvent}
+                                        currentDate={calendarDate}
+                                        setCurrentDate={setCalendarDate}
+                                        viewType={calendarViewType}
                                     />
                                 </div>
                             ) : viewMode === 'managing' ? (
@@ -1285,8 +1485,11 @@ const App: React.FC = () => {
                                         routines={routines}
                                         logs={logs}
                                         onAddRoutine={handleAddRoutine}
+                                        onEditTask={handleEditTask}
                                         onDeleteTask={handleDeleteGlobalTask}
+                                        onEditAssignment={handleEditAssignment}
                                         onDeleteAssignment={handleDeleteAssignment}
+                                        onEditRoutine={handleEditRoutine}
                                         onDeleteRoutine={handleDeleteRoutine}
                                         onToggleRoutineCalendar={handleToggleRoutineCalendar}
                                         onSendText={handleSendText}

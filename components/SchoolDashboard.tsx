@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
 import { Assignment, SchoolNote } from '../types';
-import { Book, FileText, Plus, Calendar, Clock, ChevronRight } from 'lucide-react';
+import { Book, FileText, Plus, Calendar, Clock, ChevronRight, Edit2 } from 'lucide-react';
 
 interface SchoolDashboardProps {
   assignments: Assignment[];
   schoolNotes: SchoolNote[];
   onAddAssignment: (assignment: Assignment) => void;
+  onEditAssignment?: (assignmentId: string, updates: Partial<Assignment>) => void;
   onAddNote: (note: SchoolNote) => void;
 }
 
@@ -13,6 +14,7 @@ const SchoolDashboard: React.FC<SchoolDashboardProps> = ({
   assignments,
   schoolNotes,
   onAddAssignment,
+  onEditAssignment,
   onAddNote
 }) => {
   const [activeTab, setActiveTab] = useState<'assignments' | 'notes'>('assignments');
@@ -20,6 +22,7 @@ const SchoolDashboard: React.FC<SchoolDashboardProps> = ({
   // Assignment State
   const [isAddAssignmentOpen, setIsAddAssignmentOpen] = useState(false);
   const [newAssignment, setNewAssignment] = useState<Partial<Assignment>>({ priority: 'Medium', status: 'To Do' });
+  const [editingAssignmentId, setEditingAssignmentId] = useState<string | null>(null);
 
   // Note State
   const [selectedNote, setSelectedNote] = useState<SchoolNote | null>(null);
@@ -28,20 +31,39 @@ const SchoolDashboard: React.FC<SchoolDashboardProps> = ({
     e.preventDefault();
     if (!newAssignment.title || !newAssignment.subject) return;
 
-    const assignment: Assignment = {
-      id: Math.random().toString(36).substring(2, 9),
-      title: newAssignment.title,
-      subject: newAssignment.subject,
-      dueDate: newAssignment.dueDate || '',
-      status: 'To Do',
-      priority: (newAssignment.priority as any) || 'Medium',
-      details: newAssignment.details || '',
-      createdAt: new Date().toISOString()
-    };
-
-    onAddAssignment(assignment);
+    if (editingAssignmentId && onEditAssignment) {
+        onEditAssignment(editingAssignmentId, {
+            title: newAssignment.title,
+            subject: newAssignment.subject,
+            dueDate: newAssignment.dueDate,
+            priority: (newAssignment.priority as any),
+            details: newAssignment.details,
+            estimatedHours: newAssignment.estimatedHours
+        });
+    } else {
+        const assignment: Assignment = {
+          id: Math.random().toString(36).substring(2, 9),
+          title: newAssignment.title,
+          subject: newAssignment.subject,
+          dueDate: newAssignment.dueDate || '',
+          status: 'To Do',
+          priority: (newAssignment.priority as any) || 'Medium',
+          details: newAssignment.details || '',
+          estimatedHours: newAssignment.estimatedHours,
+          createdAt: new Date().toISOString()
+        };
+        onAddAssignment(assignment);
+    }
+    
     setIsAddAssignmentOpen(false);
     setNewAssignment({ priority: 'Medium', status: 'To Do' });
+    setEditingAssignmentId(null);
+  };
+
+  const handleEditClick = (a: Assignment) => {
+      setEditingAssignmentId(a.id);
+      setNewAssignment(a);
+      setIsAddAssignmentOpen(true);
   };
 
   const renderAssignments = () => {
@@ -50,7 +72,11 @@ const SchoolDashboard: React.FC<SchoolDashboardProps> = ({
         <div className="flex justify-between items-center mb-6">
           <h2 className="text-2xl font-bold text-slate-800 dark:text-white">Assignments</h2>
           <button
-            onClick={() => setIsAddAssignmentOpen(true)}
+            onClick={() => {
+                setEditingAssignmentId(null);
+                setNewAssignment({ priority: 'Medium', status: 'To Do' });
+                setIsAddAssignmentOpen(true);
+            }}
             className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-medium transition-colors"
           >
             <Plus className="w-4 h-4" /> Add Assignment
@@ -78,7 +104,7 @@ const SchoolDashboard: React.FC<SchoolDashboardProps> = ({
                   required
                 />
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-3 gap-4">
                 <input
                   type="datetime-local"
                   className="bg-slate-50 dark:bg-black/20 border border-slate-200 dark:border-white/10 rounded-lg px-3 py-2 text-sm text-slate-900 dark:text-white focus:outline-none focus:border-blue-500"
@@ -94,6 +120,14 @@ const SchoolDashboard: React.FC<SchoolDashboardProps> = ({
                   <option value="Medium">Medium Priority</option>
                   <option value="High">High Priority</option>
                 </select>
+                <input
+                  type="number"
+                  step="0.5"
+                  placeholder="Est. Hours"
+                  className="bg-slate-50 dark:bg-black/20 border border-slate-200 dark:border-white/10 rounded-lg px-3 py-2 text-sm text-slate-900 dark:text-white focus:outline-none focus:border-blue-500"
+                  value={newAssignment.estimatedHours || ''}
+                  onChange={e => setNewAssignment({ ...newAssignment, estimatedHours: parseFloat(e.target.value) || undefined })}
+                />
               </div>
               <textarea
                 placeholder="Details..."
@@ -127,7 +161,7 @@ const SchoolDashboard: React.FC<SchoolDashboardProps> = ({
             </div>
           ) : (
             assignments.map(a => (
-              <div key={a.id} className="bg-white dark:bg-white/5 p-4 rounded-xl border border-slate-200 dark:border-white/10 hover:border-blue-500/50 transition-colors group">
+              <div key={a.id} className="relative bg-white dark:bg-white/5 p-4 rounded-xl border border-slate-200 dark:border-white/10 hover:border-blue-500/50 transition-colors group">
                 <div className="flex justify-between items-start mb-2">
                   <div>
                     <span className="text-[10px] font-bold uppercase tracking-wider text-blue-500 bg-blue-50 dark:bg-blue-500/10 px-2 py-0.5 rounded-full mb-1 inline-block">
@@ -157,7 +191,20 @@ const SchoolDashboard: React.FC<SchoolDashboardProps> = ({
                     <Clock className="w-3.5 h-3.5" />
                     {a.status}
                   </div>
+                  {a.estimatedHours && (
+                    <div className="flex items-center gap-1">
+                       {a.estimatedHours}h est.
+                    </div>
+                  )}
                 </div>
+                {onEditAssignment && (
+                    <button 
+                         onClick={() => handleEditClick(a)}
+                         className="absolute top-4 right-20 opacity-0 group-hover:opacity-100 transition-opacity p-1.5 text-slate-400 hover:text-blue-500"
+                    >
+                        <Edit2 className="w-4 h-4" />
+                    </button>
+                )}
               </div>
             ))
           )}

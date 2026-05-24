@@ -27,6 +27,7 @@ export interface Task {
   priority: 'Low' | 'Medium' | 'High';
   dueDate: string; // ISO String
   estimatedTime?: number; // Estimated time in minutes
+  estimatedHours?: number; // Estimated hours for task
   createdAt: string; // ISO String
   subtasks?: Task[]; // Nested tasks
 }
@@ -46,6 +47,7 @@ export interface Assignment {
   dueDate: string; // ISO String
   status: 'To Do' | 'In Progress' | 'Done';
   priority: 'Low' | 'Medium' | 'High';
+  estimatedHours?: number; // Estimated hours needed
   details?: string;
   createdAt: string; // ISO String
 }

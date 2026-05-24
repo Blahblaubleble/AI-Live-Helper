@@ -50,9 +50,9 @@ export const LocalAuthService = {
             return { success: false, error: "User already exists or DB Error" };
         }
         return { success: true };
-    } catch (e) {
+    } catch (e: any) {
         console.error("Storage error", e);
-        return { success: false, error: "Could not save account" };
+        return { success: false, error: e.message || "Could not save account" };
     }
   },
 
@@ -73,9 +73,9 @@ export const LocalAuthService = {
             }
             return { success: false, error: "Invalid password" };
         }
-    } catch (e) {
+    } catch (e: any) {
         console.error("Login error", e);
-        return { success: false, error: "Login failed (System Error)" };
+        return { success: false, error: e.message || "Login failed (System Error)" };
     }
   }
 };
